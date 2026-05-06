@@ -25,7 +25,7 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 # Only copy what's needed for production
 COPY package.json pnpm-lock.yaml ./
 COPY patches/ ./patches/
-RUN pnpm install --frozen-lockfile --prod
+RUN pnpm install --frozen-lockfile
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/drizzle ./drizzle
