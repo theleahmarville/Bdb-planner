@@ -13,7 +13,9 @@ import { registerAuthRoutes } from "./auth";
 import { uploadRouter } from "../uploadRoutes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
-import { serveStatic, setupVite } from "./vite";
+// vite.ts is only loaded dynamically in development so esbuild never
+// bundles vite / vite-plugins into the production output
+
 import { getDb } from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -148,9 +150,12 @@ async function startServer() {
     })
   );
   // development mode uses Vite, production mode uses static files
+  // vite.ts is imported dynamically so devDependencies are never bundled
   if (process.env.NODE_ENV === "development") {
+    const { setupVite } = await import("./vite");
     await setupVite(app, server);
   } else {
+    const { serveStatic } = await import("./vite");
     serveStatic(app);
   }
 
