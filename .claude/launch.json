@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "/opt/homebrew/Cellar/node/25.8.2/bin/node",
+      "runtimeArgs": ["/opt/homebrew/bin/pnpm", "dev"],
+      "port": 3000,
+      "autoPort": false,
+      "env": {
+        "PATH": "/opt/homebrew/bin:/opt/homebrew/Cellar/node/25.8.2/bin:/usr/local/bin:/usr/bin:/bin"
+      }
+    }
+  ]
+}

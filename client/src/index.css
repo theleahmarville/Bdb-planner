@@ -1,0 +1,279 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+:root {
+  --radius: 0.625rem;
+  /* BDB Planner: Clean cream/white with bold black accents */
+  --background: oklch(0.98 0.003 90);
+  --foreground: oklch(0.12 0.01 240);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.12 0.01 240);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.12 0.01 240);
+  --primary: oklch(0.12 0.01 240);
+  --primary-foreground: oklch(0.98 0.003 90);
+  --secondary: oklch(0.94 0.003 90);
+  --secondary-foreground: oklch(0.12 0.01 240);
+  --muted: oklch(0.94 0.003 90);
+  --muted-foreground: oklch(0.52 0.01 240);
+  --accent: oklch(0.94 0.003 90);
+  --accent-foreground: oklch(0.12 0.01 240);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.88 0.003 90);
+  --input: oklch(0.88 0.003 90);
+  --ring: oklch(0.12 0.01 240);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.12 0.01 240);
+  --sidebar-foreground: oklch(0.96 0.003 90);
+  --sidebar-primary: oklch(0.96 0.003 90);
+  --sidebar-primary-foreground: oklch(0.12 0.01 240);
+  --sidebar-accent: oklch(0.22 0.01 240);
+  --sidebar-accent-foreground: oklch(0.96 0.003 90);
+  --sidebar-border: oklch(0.25 0.01 240);
+  --sidebar-ring: oklch(0.96 0.003 90);
+}
+
+.dark {
+  --background: oklch(0.14 0.005 240);
+  --foreground: oklch(0.96 0.003 90);
+  --card: oklch(0.20 0.006 240);
+  --card-foreground: oklch(0.96 0.003 90);
+  --popover: oklch(0.20 0.006 240);
+  --popover-foreground: oklch(0.96 0.003 90);
+  --primary: oklch(0.96 0.003 90);
+  --primary-foreground: oklch(0.14 0.005 240);
+  --secondary: oklch(0.26 0.006 240);
+  --secondary-foreground: oklch(0.96 0.003 90);
+  --muted: oklch(0.26 0.006 240);
+  --muted-foreground: oklch(0.65 0.01 240);
+  --accent: oklch(0.26 0.006 240);
+  --accent-foreground: oklch(0.96 0.003 90);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.65 0.01 240);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.10 0.008 240);
+  --sidebar-foreground: oklch(0.96 0.003 90);
+  --sidebar-primary: oklch(0.96 0.003 90);
+  --sidebar-primary-foreground: oklch(0.14 0.005 240);
+  --sidebar-accent: oklch(0.22 0.01 240);
+  --sidebar-accent-foreground: oklch(0.96 0.003 90);
+  --sidebar-border: oklch(0.25 0.01 240);
+  --sidebar-ring: oklch(0.65 0.01 240);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Inter", sans-serif;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [type="button"]:not(:disabled),
+  [type="submit"]:not(:disabled),
+  [type="reset"]:not(:disabled),
+  a[href],
+  select:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled) {
+    @apply cursor-pointer;
+  }
+}
+
+@layer components {
+  /**
+   * Custom container utility that centers content and adds responsive padding.
+   *
+   * This overrides Tailwind's default container behavior to:
+   * - Auto-center content (mx-auto)
+   * - Add responsive horizontal padding
+   * - Set max-width for large screens
+   *
+   * Usage: <div className="container">...</div>
+   *
+   * For custom widths, use max-w-* utilities directly:
+   * <div className="max-w-6xl mx-auto px-4">...</div>
+   */
+  .container {
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1rem; /* 16px - mobile padding */
+    padding-right: 1rem;
+  }
+
+  .flex {
+    min-height: 0;
+    min-width: 0;
+  }
+
+  @media (min-width: 640px) {
+    .container {
+      padding-left: 1.5rem; /* 24px - tablet padding */
+      padding-right: 1.5rem;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .container {
+      padding-left: 2rem; /* 32px - desktop padding */
+      padding-right: 2rem;
+      max-width: 1400px;
+    }
+  }
+
+  /* Editable planner field */
+  .planner-field {
+    @apply w-full px-2 py-1 rounded cursor-text transition-all duration-150;
+    @apply border border-transparent hover:border-border hover:bg-white;
+    @apply focus:outline-none focus:border-primary focus:bg-white;
+    resize: none;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: 1.5;
+    background: transparent;
+  }
+
+  .planner-field::placeholder {
+    @apply text-muted-foreground;
+    font-style: italic;
+  }
+
+  /* Pill-shaped section headers */
+  .planner-pill {
+    @apply inline-flex items-center px-4 py-1 rounded-full text-sm font-semibold;
+    @apply bg-foreground text-background;
+  }
+
+  /* Section card */
+  .planner-card {
+    @apply bg-white rounded-xl border border-border p-4 shadow-sm;
+  }
+
+  /* Habit checkbox */
+  .habit-check {
+    @apply w-5 h-5 rounded border-2 border-foreground cursor-pointer flex items-center justify-center transition-colors flex-shrink-0;
+  }
+
+  .habit-check.checked {
+    @apply bg-foreground text-background;
+  }
+
+  /* Sidebar nav item */
+  .sidebar-nav-item {
+    @apply flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer;
+    @apply text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground;
+  }
+
+  .sidebar-nav-item.active {
+    @apply bg-sidebar-accent text-sidebar-accent-foreground;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: oklch(0.78 0.003 90); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: oklch(0.6 0.003 90); }
+/* ── Mobile / Safe Area ───────────────────────────────────────── */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .safe-area-inset-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pb-safe {
+    padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Touch-friendly minimum tap target */
+@media (max-width: 767px) {
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  /* Override for inline/icon-only elements */
+  .tap-sm {
+    min-height: 36px;
+    min-width: 36px;
+  }
+  /* Prevent horizontal overflow on mobile */
+  .planner-card {
+    @apply overflow-x-auto;
+  }
+  /* Larger text inputs on mobile to prevent iOS zoom */
+  input[type="text"],
+  input[type="email"],
+  input[type="number"],
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Responsive tab overflow — horizontal scroll for tab lists */
+.tabs-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.tabs-scroll::-webkit-scrollbar { display: none; }
+
+/* Mobile-friendly table wrapper */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
