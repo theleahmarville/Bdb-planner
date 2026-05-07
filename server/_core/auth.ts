@@ -7,6 +7,7 @@ import { getSessionCookieOptions } from "./cookies";
 import { authService } from "./sdk";
 import { ENV } from "./env";
 import { google } from "googleapis";
+import { sendWelcomeEmail } from "./email";
 
 export function registerAuthRoutes(app: Express) {
   // GET /api/auth/google/callback — Google OAuth callback
@@ -151,6 +152,9 @@ export function registerAuthRoutes(app: Express) {
 
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+
+      // Send welcome email (non-blocking — never delays registration response)
+      sendWelcomeEmail(user.email!, user.name || "").catch(() => {});
 
       res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
     } catch (error) {
