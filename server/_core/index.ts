@@ -189,8 +189,8 @@ async function startServer() {
 
 startServer().catch(console.error);
 
-// ─── Slack Reminder Cron (every 5 minutes) ────────────────────────────────────
-cron.schedule("*/5 * * * *", async () => {
+// ─── Slack Reminder Cron (every 15 minutes) ──────────────────────────────────
+cron.schedule("*/15 * * * *", async () => {
   try {
     const { getUnsentReminders, markReminderSent, getUserIntegrations } = await import("../db");
     const { default: axios } = await import("axios");
