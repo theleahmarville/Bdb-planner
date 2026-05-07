@@ -55,6 +55,17 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+async function runMigrations() {
+  try {
+    console.log("🔄 Running database migrations...");
+    const { execSync } = await import("child_process");
+    execSync("npx drizzle-kit migrate", { stdio: "inherit" });
+    console.log("✅ Migrations complete");
+  } catch (err) {
+    console.warn("⚠️  Migration warning (may be safe to ignore):", err);
+  }
+}
+
 async function startServer() {
   // ─── Required env var validation ─────────────────────────────────────────────
   const requiredEnvVars = ["DATABASE_URL", "JWT_SECRET"];
@@ -68,6 +79,11 @@ async function startServer() {
   const jwtSecret = process.env.JWT_SECRET ?? "";
   if (jwtSecret.length < 32) {
     console.warn("WARNING: JWT_SECRET is too short or not set. Use a random string of at least 32 characters in production.");
+  }
+
+  // Run migrations on startup (production only)
+  if (process.env.NODE_ENV === "production") {
+    await runMigrations();
   }
 
   const app = express();
