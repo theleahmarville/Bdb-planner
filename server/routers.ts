@@ -808,7 +808,13 @@ IMPORTANT RULES:
         { role: 'user', content: input.message },
       ];
 
-      const response = await invokeLLM({ messages });
+      let response;
+      try {
+        response = await invokeLLM({ messages });
+      } catch (llmErr: any) {
+        console.error("[Zion] LLM call failed:", llmErr?.message || llmErr);
+        throw new Error(`AI unavailable: ${llmErr?.message || "Unknown error"}`);
+      }
       const rawContent = String(response.choices[0]?.message?.content || '');
 
       // Parse planner actions if present

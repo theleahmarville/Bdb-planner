@@ -70,6 +70,13 @@ async function startServer() {
   // ─── Required env var validation ─────────────────────────────────────────────
   const requiredEnvVars = ["DATABASE_URL", "JWT_SECRET"];
   const missingVars = requiredEnvVars.filter(v => !process.env[v]);
+
+  // Warn about optional but important vars
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn("⚠️  OPENAI_API_KEY is not set — Zion AI will not work");
+  } else {
+    console.log("✅ OPENAI_API_KEY is set — Zion AI ready");
+  }
   if (missingVars.length > 0) {
     console.error(`❌ Missing required env vars: ${missingVars.join(", ")}`);
     process.exit(1);
