@@ -89,6 +89,50 @@ export async function getDb() {
   return _db;
 }
 
+// ─── Safe Schema Migrations (raw SQL, idempotent) ─────────────────────────────
+// These ensure columns that were added after initial deploy exist in the DB.
+// Each ALTER is guarded by an INFORMATION_SCHEMA check so it's safe to run repeatedly.
+export async function ensureSchema(): Promise<void> {
+  const pool = getPool();
+  if (!pool) {
+    console.warn("[DB] ensureSchema: no pool, skipping");
+    return;
+  }
+  const conn = await pool.getConnection();
+  try {
+    const checks: Array<{ table: string; column: string; ddl: string }> = [
+      {
+        table: "users",
+        column: "gender",
+        ddl: "ALTER TABLE `users` ADD COLUMN `gender` ENUM('female','male','other') DEFAULT 'other'",
+      },
+      {
+        table: "daily_entries",
+        column: "dailyWins",
+        ddl: "ALTER TABLE `daily_entries` ADD COLUMN `dailyWins` JSON",
+      },
+    ];
+
+    for (const { table, column, ddl } of checks) {
+      const [rows] = await conn.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+        [table, column]
+      );
+      if ((rows as any[]).length === 0) {
+        await conn.query(ddl);
+        console.log(`✅ [DB] Added column ${table}.${column}`);
+      } else {
+        console.log(`✓ [DB] Column ${table}.${column} already exists`);
+      }
+    }
+  } catch (err) {
+    console.error("[DB] ensureSchema error:", err);
+  } finally {
+    conn.release();
+  }
+}
+
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) throw new Error("User openId is required for upsert");
   const db = await getDb();

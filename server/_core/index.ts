@@ -16,7 +16,7 @@ import { createContext } from "./context";
 // vite.ts is only loaded dynamically in development so esbuild never
 // bundles vite / vite-plugins into the production output
 
-import { getDb } from "../db";
+import { getDb, ensureSchema } from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -92,6 +92,9 @@ async function startServer() {
   if (process.env.NODE_ENV === "production") {
     await runMigrations();
   }
+
+  // Ensure schema columns exist (safe, idempotent — runs in all environments)
+  await ensureSchema();
 
   const app = express();
   const server = createServer(app);
