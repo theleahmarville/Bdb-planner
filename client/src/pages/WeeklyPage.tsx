@@ -146,6 +146,7 @@ export default function WeeklyPage() {
       topPriorities: ["", "", "", "", ""],
       timeSlots: {},
       gratitude: ["", "", "", "", ""],
+      dailyWins: ["", "", "", "", ""],
       waterGlasses: 0,
     };
   };
@@ -409,6 +410,28 @@ export default function WeeklyPage() {
                         updateDayData(activeDay, "gratitude", gratitude);
                       }}
                       placeholder="I'm grateful for..."
+                      className="flex-1 bg-transparent border-b border-transparent hover:border-border focus:border-primary focus:outline-none text-sm py-0.5"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              {/* Daily Wins */}
+              <div className="planner-card">
+                <div className="planner-pill mb-3">Daily Wins 🏆</div>
+                <p className="text-xs text-muted-foreground mb-2">Today I am proud of...</p>
+                {(getDayData(activeDay).dailyWins as string[] || ["", "", "", "", ""]).map((w: string, idx: number) => (
+                  <div key={idx} className="flex items-center gap-2 mb-1.5">
+                    <span className="text-amber-500 text-sm">★</span>
+                    <input
+                      type="text"
+                      value={w}
+                      onChange={(e) => {
+                        const wins = [...(getDayData(activeDay).dailyWins as string[] || ["", "", "", "", ""])];
+                        wins[idx] = e.target.value;
+                        updateDayData(activeDay, "dailyWins", wins);
+                      }}
+                      placeholder={`Win ${idx + 1}...`}
                       className="flex-1 bg-transparent border-b border-transparent hover:border-border focus:border-primary focus:outline-none text-sm py-0.5"
                     />
                   </div>

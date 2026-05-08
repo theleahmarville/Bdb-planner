@@ -218,8 +218,8 @@ export default function PlannerLayout({
         <div className="border-t border-sidebar-border my-2" />
 
         {/* This Week */}
-        <Link href={`/weekly/${new Date().getFullYear()}/${getISOWeekNumber(new Date())}`}>
-          <div className="sidebar-nav-item" title={!sidebarOpen ? "This Week" : undefined}>
+        <Link href={`/weekly/${new Date().getFullYear()}/${getISOWeekNumber(new Date())}`} style={{ display: "block", textDecoration: "none" }}>
+          <div className={cn("sidebar-nav-item cursor-pointer", isWeekly && location === `/weekly/${new Date().getFullYear()}/${getISOWeekNumber(new Date())}` && "active")} title={!sidebarOpen ? "This Week" : undefined}>
             <BookOpen size={18} className="flex-shrink-0" />
             {sidebarOpen && <span>This Week</span>}
           </div>

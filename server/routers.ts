@@ -246,6 +246,7 @@ const dailyRouter = router({
           topPriorities: z.any().optional(),
           timeSlots: z.any().optional(),
           gratitude: z.any().optional(),
+          dailyWins: z.any().optional(),
           waterGlasses: z.number().optional(),
         }),
       })

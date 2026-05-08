@@ -187,6 +187,8 @@ export const dailyEntries = mysqlTable("daily_entries", {
   timeSlots: json("timeSlots"), // { "06:00": "text", "06:30": "text", ... }
   // Gratitude
   gratitude: json("gratitude"), // array of 5 strings
+  // Daily wins
+  dailyWins: json("dailyWins"), // array of 5 strings
   // Water intake
   waterGlasses: int("waterGlasses").default(0),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
