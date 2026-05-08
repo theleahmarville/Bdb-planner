@@ -106,7 +106,7 @@ export function registerAuthRoutes(app: Express) {
 
   // POST /api/auth/register
   app.post("/api/auth/register", async (req: Request, res: Response) => {
-    const { email, password, name } = req.body;
+    const { email, password, name, gender } = req.body;
 
     if (!email || !password) {
       res.status(400).json({ error: "Email and password are required" });
@@ -129,6 +129,7 @@ export function registerAuthRoutes(app: Express) {
       const openId = nanoid(21);
       const isAdmin = ENV.adminEmail && email.toLowerCase() === ENV.adminEmail.toLowerCase();
 
+      const validGenders = ["female", "male", "other"];
       await db.upsertUser({
         openId,
         name: name || null,
@@ -136,8 +137,9 @@ export function registerAuthRoutes(app: Express) {
         passwordHash,
         loginMethod: "email",
         role: isAdmin ? "admin" : "user",
+        gender: validGenders.includes(gender) ? gender : "other",
         lastSignedIn: new Date(),
-      });
+      } as any);
 
       const user = await db.getUserByEmail(email.toLowerCase());
       if (!user) {

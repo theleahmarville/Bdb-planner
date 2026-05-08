@@ -717,6 +717,71 @@ Generate a comprehensive Weekly Digest. Structure it as JSON with these exact fi
 import { invokeLLM } from "./_core/llm";
 
 const zionRouter = router({
+
+  // ── Daily personalised greeting ───────────────────────────────────────────
+  dailyGreeting: protectedProcedure.query(async ({ ctx }) => {
+    const userId = ctx.user.id;
+    const context = await getUserPlannerContext(userId);
+
+    // Get user's gender for pronoun-aware messaging
+    const { getDb } = await import('./db');
+    const { users } = await import('../drizzle/schema');
+    const { eq } = await import('drizzle-orm');
+    const db = await getDb();
+    const userRow = db ? (await db.select().from(users).where(eq(users.id, userId)).limit(1))[0] : null;
+    const gender = userRow?.gender ?? 'other';
+    const firstName = ctx.user.name?.split(' ')[0] || 'friend';
+
+    const hour = new Date().getHours();
+    const timeOfDay = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : hour < 21 ? 'evening' : 'night';
+
+    const pronounContext = gender === 'female'
+      ? 'She uses she/her pronouns. Address her warmly as a woman.'
+      : gender === 'male'
+      ? 'He uses he/him pronouns. Address him warmly as a man.'
+      : 'They use inclusive language. Keep the message gender-neutral.';
+
+    const goalsSnippet = context.bigGoals.filter(g => g.title).slice(0, 3).map(g => g.title).join(', ');
+    const winsSnippet = context.weeklyPlan?.winsOfWeek || '';
+    const monthTheme = context.monthlyPlan?.themeWord || '';
+    const habitsData = context.weeklyPlan?.habitTracker as any;
+    const habitSummary = habitsData
+      ? Object.entries(habitsData).map(([k, v]: [string, any]) => {
+          const name = v?.name || k;
+          const done = Array.isArray(v?.days) ? v.days.filter(Boolean).length : 0;
+          return `${name} ${done}/7`;
+        }).join(', ')
+      : '';
+
+    const prompt = `Write a SHORT (2-4 sentences MAX), warm, personalised good ${timeOfDay} message for ${firstName}.
+
+${pronounContext}
+
+Context about their life right now:
+${goalsSnippet ? `- Working toward: ${goalsSnippet}` : ''}
+${monthTheme ? `- This month's theme: ${monthTheme}` : ''}
+${winsSnippet ? `- Recent wins: ${winsSnippet}` : ''}
+${habitSummary ? `- Habit progress: ${habitSummary}` : ''}
+
+Rules:
+- Start with "Good ${timeOfDay}, ${firstName}!"
+- Be specific to their actual goals/wins if available — make them feel SEEN
+- Warm, encouraging, grounded — not generic or cheesy
+- If no data yet, welcome them and encourage them to start their journey
+- 2-4 sentences only. No bullet points. Plain text.`;
+
+    const response = await invokeLLM({
+      messages: [{ role: 'user', content: prompt }],
+      maxTokens: 200,
+    });
+
+    return {
+      message: String(response.choices[0]?.message?.content || `Good ${timeOfDay}, ${firstName}! Ready to make today count?`).trim(),
+      timeOfDay,
+      firstName,
+    };
+  }),
+
   history: protectedProcedure.query(async ({ ctx }) => {
     return getZionHistory(ctx.user.id, 60);
   }),

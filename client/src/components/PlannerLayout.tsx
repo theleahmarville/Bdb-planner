@@ -24,6 +24,7 @@ import {
 import { MONTHS } from "@/lib/planner";
 import { cn } from "@/lib/utils";
 import IntegrationBar from "./IntegrationBar";
+import GreetingModal from "./GreetingModal";
 import AIDigestPanel from "./AIDigestPanel";
 import NightReflectionModal from "./NightReflectionModal";
 import DailyDevotionModal from "./DailyDevotionModal";
@@ -424,6 +425,8 @@ export default function PlannerLayout({
 
       {/* Persistent Integration Bar — visible on all pages */}
       <IntegrationBar />
+      {/* Daily personalised greeting modal */}
+      <GreetingModal />
       {/* AI Digest Panel */}
       <AIDigestPanel isOpen={digestOpen} onClose={() => setDigestOpen(false)} />
       {/* Nightly Reflection Modal */}
