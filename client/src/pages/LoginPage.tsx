@@ -72,7 +72,7 @@ export default function LoginPage() {
         }} />
         <div className="relative z-10">
           <div className="flex items-center gap-3 mb-16">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center">
               <span className="text-white text-[10px] font-black">BDB</span>
             </div>
             <div>
@@ -83,7 +83,7 @@ export default function LoginPage() {
           <div>
             <h2 className="text-5xl font-black text-white leading-[1.1] mb-6">
               Your vision.<br />Your plan.<br />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-orange-500">Your year.</span>
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-500 to-green-600">Your year.</span>
             </h2>
             <p className="text-white/60 text-lg leading-relaxed max-w-sm">
               The digital planner built for visionaries who are ready to turn their dreams into daily actions.
@@ -110,7 +110,7 @@ export default function LoginPage() {
         <div className="w-full max-w-md">
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center gap-2 mb-8">
-            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center">
               <span className="text-white text-[9px] font-black">BDB</span>
             </div>
             <span className="font-black text-xl">Be Do Become</span>
@@ -138,7 +138,7 @@ export default function LoginPage() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   autoComplete="name"
-                  className="h-12 border-[#e8e0d5] focus:border-amber-400 focus:ring-amber-200 bg-white"
+                  className="h-12 border-[#e8e0d5] focus:border-emerald-400 focus:ring-emerald-200 bg-white"
                 />
               </div>
             )}
@@ -153,7 +153,7 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 autoComplete="email"
-                className="h-12 border-[#e8e0d5] focus:border-amber-400 focus:ring-amber-200 bg-white"
+                className="h-12 border-[#e8e0d5] focus:border-emerald-400 focus:ring-emerald-200 bg-white"
               />
             </div>
 
@@ -169,7 +169,7 @@ export default function LoginPage() {
                   required
                   minLength={mode === "register" ? 8 : undefined}
                   autoComplete={mode === "login" ? "current-password" : "new-password"}
-                  className="h-12 border-[#e8e0d5] focus:border-amber-400 focus:ring-amber-200 bg-white pr-12"
+                  className="h-12 border-[#e8e0d5] focus:border-emerald-400 focus:ring-emerald-200 bg-white pr-12"
                 />
                 <button
                   type="button"
@@ -192,8 +192,8 @@ export default function LoginPage() {
                       onClick={() => setGender(g)}
                       className={`h-11 rounded-xl border-2 text-sm font-semibold capitalize transition-all ${
                         gender === g
-                          ? "border-amber-400 bg-amber-50 text-amber-700"
-                          : "border-[#e8e0d5] bg-white text-[#8a7a6a] hover:border-amber-200"
+                          ? "border-emerald-400 bg-emerald-50 text-emerald-700"
+                          : "border-[#e8e0d5] bg-white text-[#8a7a6a] hover:border-emerald-200"
                       }`}
                     >
                       {g === "female" ? "👩 Woman" : g === "male" ? "👨 Man" : "🌟 Other"}
@@ -211,7 +211,7 @@ export default function LoginPage() {
 
             <Button
               type="submit"
-              className="w-full h-12 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-base rounded-xl border-0 shadow-md hover:shadow-lg transition-all"
+              className="w-full h-12 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white font-bold text-base rounded-xl border-0 shadow-md hover:shadow-lg transition-all"
               disabled={loading}
             >
               {loading ? (
@@ -225,13 +225,13 @@ export default function LoginPage() {
 
           {/* Zion AI teaser */}
           {mode === "register" && (
-            <div className="mt-4 p-4 bg-amber-50 border border-amber-100 rounded-xl flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center flex-shrink-0 mt-0.5">
+            <div className="mt-4 p-4 bg-emerald-50 border border-emerald-100 rounded-xl flex items-start gap-3">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center flex-shrink-0 mt-0.5">
                 <Sparkles size={14} className="text-white" />
               </div>
               <div>
-                <p className="text-xs font-bold text-amber-800">Meet Zion AI</p>
-                <p className="text-xs text-amber-700 mt-0.5">Your personal wellness coach greets you every day with a message made just for you.</p>
+                <p className="text-xs font-bold text-emerald-800">Meet Zion AI</p>
+                <p className="text-xs text-emerald-700 mt-0.5">Your personal wellness coach greets you every day with a message made just for you.</p>
               </div>
             </div>
           )}
@@ -240,14 +240,14 @@ export default function LoginPage() {
             {mode === "login" ? (
               <>
                 Don't have an account?{" "}
-                <button type="button" className="text-amber-600 font-semibold hover:text-amber-700" onClick={() => switchMode("register")}>
+                <button type="button" className="text-emerald-600 font-semibold hover:text-emerald-700" onClick={() => switchMode("register")}>
                   Sign up free
                 </button>
               </>
             ) : (
               <>
                 Already have an account?{" "}
-                <button type="button" className="text-amber-600 font-semibold hover:text-amber-700" onClick={() => switchMode("login")}>
+                <button type="button" className="text-emerald-600 font-semibold hover:text-emerald-700" onClick={() => switchMode("login")}>
                   Sign in
                 </button>
               </>

@@ -422,7 +422,7 @@ export default function WeeklyPage() {
                 <p className="text-xs text-muted-foreground mb-2">Today I am proud of...</p>
                 {(getDayData(activeDay).dailyWins as string[] || ["", "", "", "", ""]).map((w: string, idx: number) => (
                   <div key={idx} className="flex items-center gap-2 mb-1.5">
-                    <span className="text-amber-500 text-sm">★</span>
+                    <span className="text-emerald-600 text-sm">★</span>
                     <input
                       type="text"
                       value={w}

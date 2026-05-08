@@ -8,13 +8,13 @@ function getTimeOfDay(): { greeting: string; icon: React.ReactNode; color: strin
     return {
       greeting: "Good morning",
       icon: <Sun className="w-4 h-4" />,
-      color: "text-amber-500",
+      color: "text-emerald-600",
     };
   } else if (hour >= 12 && hour < 17) {
     return {
       greeting: "Good afternoon",
       icon: <Sparkles className="w-4 h-4" />,
-      color: "text-orange-500",
+      color: "text-emerald-600",
     };
   } else if (hour >= 17 && hour < 21) {
     return {

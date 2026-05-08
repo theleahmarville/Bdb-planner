@@ -4,8 +4,8 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Sparkles, X } from "lucide-react";
 
 const TIME_GRADIENTS: Record<string, string> = {
-  morning: "from-amber-400 to-orange-400",
-  afternoon: "from-orange-400 to-rose-400",
+  morning: "from-emerald-500 to-green-500",
+  afternoon: "from-green-500 to-rose-400",
   evening: "from-rose-400 to-violet-500",
   night: "from-violet-500 to-indigo-600",
 };

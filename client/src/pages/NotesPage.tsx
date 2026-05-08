@@ -181,9 +181,9 @@ function LockModal({
 
           {/* Note for set mode */}
           {mode === "set" && (
-            <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl">
-              <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <p className="text-xs text-amber-700">
+            <div className="flex items-start gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-emerald-700">
                 If you forget this password, your note content cannot be recovered. Store it somewhere safe.
               </p>
             </div>

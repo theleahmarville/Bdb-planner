@@ -51,8 +51,8 @@ const ACTION_META: Record<string, {
   schedule:     { icon: <Calendar className="w-3.5 h-3.5" />,  label: "Schedule",       color: "bg-green-50 text-green-700 border-green-200",     navHint: "Weekly View → Schedule" },
   calendar:     { icon: <Calendar className="w-3.5 h-3.5" />,  label: "Calendar",       color: "bg-teal-50 text-teal-700 border-teal-200",        navHint: "Weekly View → Schedule" },
   habit:        { icon: <Heart className="w-3.5 h-3.5" />,     label: "Habit",          color: "bg-pink-50 text-pink-700 border-pink-200",        navHint: "Weekly View → Habits" },
-  monthly_goal: { icon: <BarChart2 className="w-3.5 h-3.5" />, label: "Monthly Goal",   color: "bg-amber-50 text-amber-700 border-amber-200",     navHint: "Monthly View → Goals" },
-  priority:     { icon: <Target className="w-3.5 h-3.5" />,    label: "Priority",       color: "bg-orange-50 text-orange-700 border-orange-200",  navHint: "Weekly View → Priorities" },
+  monthly_goal: { icon: <BarChart2 className="w-3.5 h-3.5" />, label: "Monthly Goal",   color: "bg-emerald-50 text-emerald-700 border-emerald-200",     navHint: "Monthly View → Goals" },
+  priority:     { icon: <Target className="w-3.5 h-3.5" />,    label: "Priority",       color: "bg-emerald-50 text-emerald-700 border-emerald-200",  navHint: "Weekly View → Priorities" },
   intention:    { icon: <Sparkles className="w-3.5 h-3.5" />,  label: "Intention",      color: "bg-violet-50 text-violet-700 border-violet-200",  navHint: "Weekly View → Intentions" },
   win:          { icon: <CheckCircle2 className="w-3.5 h-3.5" />, label: "Win",         color: "bg-emerald-50 text-emerald-700 border-emerald-200", navHint: "Weekly View → Wins" },
   reminder:     { icon: <Bell className="w-3.5 h-3.5" />,      label: "Reminder",       color: "bg-red-50 text-red-700 border-red-200",           navHint: "Weekly View → Schedule" },
@@ -214,7 +214,7 @@ function ActionCardsGroup({
   return (
     <div className="w-full mt-1 space-y-1">
       <div className="flex items-center justify-between px-1">
-        <div className="text-[10px] font-semibold text-amber-600 flex items-center gap-1">
+        <div className="text-[10px] font-semibold text-emerald-600 flex items-center gap-1">
           <Sparkles className="w-3 h-3" />
           {actions.length} item{actions.length > 1 ? "s" : ""} ready to save
         </div>
@@ -222,7 +222,7 @@ function ActionCardsGroup({
           <Button
             size="sm"
             variant="outline"
-            className="h-6 px-2 text-[10px] font-semibold gap-1 bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
+            className="h-6 px-2 text-[10px] font-semibold gap-1 bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
             onClick={handleSaveAll}
           >
             <SaveAll className="w-3 h-3" />
@@ -264,7 +264,7 @@ function MessageBubble({ msg }: { msg: Message }) {
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : "flex-row"} mb-4`}>
       {!isUser && (
-        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shrink-0 mt-1 shadow-sm">
+        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shrink-0 mt-1 shadow-sm">
           <Sparkles className="w-4 h-4 text-white" />
         </div>
       )}
@@ -456,7 +456,7 @@ export default function ZionPage() {
   if (authLoading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <Loader2 className="w-6 h-6 animate-spin text-amber-500" />
+        <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
       </div>
     );
   }
@@ -466,7 +466,7 @@ export default function ZionPage() {
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-[#e8e0d5] bg-white/80 backdrop-blur-sm shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-md">
+          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shadow-md">
             <Sparkles className="w-5 h-5 text-white" />
           </div>
           <div>
@@ -475,7 +475,7 @@ export default function ZionPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant="outline" className="text-[10px] bg-amber-50 text-amber-700 border-amber-200 hidden sm:flex">
+          <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200 hidden sm:flex">
             <Sparkles className="w-2.5 h-2.5 mr-1" /> Fully Actionable
           </Badge>
           <Button
@@ -519,7 +519,7 @@ export default function ZionPage() {
       >
         {historyLoading ? (
           <div className="flex items-center justify-center h-32">
-            <Loader2 className="w-5 h-5 animate-spin text-amber-400" />
+            <Loader2 className="w-5 h-5 animate-spin text-emerald-500" />
           </div>
         ) : (
           messages.map(msg => <MessageBubble key={msg.id} msg={msg} />)
@@ -527,14 +527,14 @@ export default function ZionPage() {
 
         {isSending && (
           <div className="flex gap-3 mb-4">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shrink-0 mt-1 shadow-sm">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shrink-0 mt-1 shadow-sm">
               <Sparkles className="w-4 h-4 text-white" />
             </div>
             <div className="bg-white border border-[#e8e0d5] rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
               <div className="flex gap-1 items-center h-5">
-                <div className="w-2 h-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "0ms" }} />
-                <div className="w-2 h-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "150ms" }} />
-                <div className="w-2 h-2 rounded-full bg-amber-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: "0ms" }} />
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: "150ms" }} />
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-bounce" style={{ animationDelay: "300ms" }} />
               </div>
             </div>
           </div>
@@ -564,7 +564,7 @@ export default function ZionPage() {
             <button
               key={prompt}
               onClick={() => setInput(prompt)}
-              className="shrink-0 text-[10px] px-2.5 py-1 rounded-full border border-[#e8e0d5] bg-white text-[#8a7a6a] hover:bg-amber-50 hover:border-amber-200 hover:text-amber-700 transition-colors whitespace-nowrap"
+              className="shrink-0 text-[10px] px-2.5 py-1 rounded-full border border-[#e8e0d5] bg-white text-[#8a7a6a] hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors whitespace-nowrap"
             >
               {prompt}
             </button>
@@ -579,8 +579,8 @@ export default function ZionPage() {
               isRecording
                 ? "bg-red-500 text-white animate-pulse shadow-lg shadow-red-200"
                 : transcribeMutation.isPending
-                ? "bg-amber-100 text-amber-400"
-                : "bg-[#f0ebe4] text-[#8a7a6a] hover:bg-amber-100 hover:text-amber-600"
+                ? "bg-emerald-100 text-emerald-500"
+                : "bg-[#f0ebe4] text-[#8a7a6a] hover:bg-emerald-100 hover:text-emerald-600"
             }`}
             title={isRecording ? "Stop recording" : "Start voice input"}
           >
@@ -600,7 +600,7 @@ export default function ZionPage() {
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Type your brain dump, ask for a reminder, add to calendar, log a win... (Enter to send)"
-              className="resize-none min-h-[44px] max-h-32 text-sm bg-[#f8f5f0] border-[#e8e0d5] rounded-xl pr-12 focus:border-amber-300 focus:ring-amber-200 placeholder:text-[#c8c0b4]"
+              className="resize-none min-h-[44px] max-h-32 text-sm bg-[#f8f5f0] border-[#e8e0d5] rounded-xl pr-12 focus:border-emerald-300 focus:ring-emerald-200 placeholder:text-[#c8c0b4]"
               rows={1}
               disabled={isSending}
             />
@@ -611,7 +611,7 @@ export default function ZionPage() {
             disabled={!input.trim() || isSending}
             className={`shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-all ${
               input.trim() && !isSending
-                ? "bg-gradient-to-br from-amber-400 to-orange-500 text-white shadow-md hover:shadow-lg hover:scale-105"
+                ? "bg-gradient-to-br from-emerald-500 to-green-600 text-white shadow-md hover:shadow-lg hover:scale-105"
                 : "bg-[#f0ebe4] text-[#c8c0b4] cursor-not-allowed"
             }`}
           >

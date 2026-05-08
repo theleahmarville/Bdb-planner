@@ -115,6 +115,10 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     }
+    if ((user as any).gender !== undefined) {
+      (values as any).gender = (user as any).gender;
+      updateSet.gender = (user as any).gender;
+    }
     if (!values.lastSignedIn) values.lastSignedIn = new Date();
     if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
     await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });

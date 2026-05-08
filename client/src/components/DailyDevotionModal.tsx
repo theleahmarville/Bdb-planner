@@ -168,11 +168,11 @@ export default function DailyDevotionModal({ open, onClose }: Props) {
         {devotion && !isLoading && (
           <div className="bg-[#faf8f5] px-7 py-5">
             <div className="flex items-start gap-3">
-              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shrink-0 shadow-sm mt-0.5">
+              <div className="w-9 h-9 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shrink-0 shadow-sm mt-0.5">
                 <Sparkles size={15} className="text-white" />
               </div>
               <div>
-                <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest mb-1">Today's Affirmation · from Zion</p>
+                <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest mb-1">Today's Affirmation · from Zion</p>
                 <p className="text-[15px] text-[#2d2520] font-medium leading-relaxed italic">
                   {devotion.affirmation}
                 </p>
@@ -180,8 +180,8 @@ export default function DailyDevotionModal({ open, onClose }: Props) {
             </div>
 
             {/* Speak it prompt */}
-            <div className="mt-4 bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-center">
-              <p className="text-xs text-amber-700 font-medium">
+            <div className="mt-4 bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 text-center">
+              <p className="text-xs text-emerald-700 font-medium">
                 🗣 Speak this affirmation out loud 3 times before you begin your day.
               </p>
             </div>
@@ -205,7 +205,7 @@ export default function DailyDevotionModal({ open, onClose }: Props) {
               size="sm"
               onClick={handleSave}
               disabled={saved || saveMutation.isPending}
-              className="flex-1 gap-1.5 bg-gradient-to-r from-amber-400 to-orange-500 text-white border-0 hover:opacity-90"
+              className="flex-1 gap-1.5 bg-gradient-to-r from-emerald-500 to-green-600 text-white border-0 hover:opacity-90"
             >
               {saveMutation.isPending ? (
                 <Loader2 size={14} className="animate-spin" />

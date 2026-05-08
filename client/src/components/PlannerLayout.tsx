@@ -246,9 +246,9 @@ export default function PlannerLayout({
 
         {/* Zion AI Chat */}
         <Link href="/zion">
-          <div className={cn("sidebar-nav-item relative", isZion && "active", "hover:bg-amber-500/20")} title={!sidebarOpen ? "Zion AI Assistant" : undefined}>
-            <Sparkles size={18} className="flex-shrink-0 text-amber-500" />
-            {sidebarOpen && <span className="text-amber-600 font-medium">Zion AI</span>}
+          <div className={cn("sidebar-nav-item relative", isZion && "active", "hover:bg-emerald-500/20")} title={!sidebarOpen ? "Zion AI Assistant" : undefined}>
+            <Sparkles size={18} className="flex-shrink-0 text-emerald-600" />
+            {sidebarOpen && <span className="text-emerald-600 font-medium">Zion AI</span>}
             {nightlyDue && (
               <span className={cn(
                 "flex items-center gap-0.5 rounded-full text-[9px] font-bold px-1.5 py-0.5 bg-violet-600 text-white animate-pulse",
@@ -276,11 +276,11 @@ export default function PlannerLayout({
         {/* AI Digest */}
         <button
           onClick={() => setDigestOpen(true)}
-          className={cn("sidebar-nav-item w-full text-left", "hover:bg-amber-500/20")}
+          className={cn("sidebar-nav-item w-full text-left", "hover:bg-emerald-500/20")}
           title={!sidebarOpen ? "AI Digest" : undefined}
         >
-          <Sparkles size={18} className="flex-shrink-0 text-amber-500" />
-          {sidebarOpen && <span className="text-amber-600 font-medium">AI Digest</span>}
+          <Sparkles size={18} className="flex-shrink-0 text-emerald-600" />
+          {sidebarOpen && <span className="text-emerald-600 font-medium">AI Digest</span>}
         </button>
 
         {/* Reminders */}
@@ -389,7 +389,7 @@ export default function PlannerLayout({
           </div>
           <button
             onClick={() => setDigestOpen(true)}
-            className="w-8 h-8 rounded-full bg-amber-600 flex items-center justify-center flex-shrink-0 hover:bg-amber-700 transition-colors"
+            className="w-8 h-8 rounded-full bg-emerald-700 flex items-center justify-center flex-shrink-0 hover:bg-emerald-800 transition-colors"
             title="AI Digest"
           >
             <Sparkles size={14} className="text-white" />

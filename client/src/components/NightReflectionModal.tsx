@@ -29,7 +29,7 @@ interface Props {
 function StepDot({ active, done }: { active: boolean; done: boolean }) {
   return (
     <div className={`w-2 h-2 rounded-full transition-all ${
-      done ? "bg-amber-500" : active ? "bg-amber-400 scale-125" : "bg-[#e8e0d5]"
+      done ? "bg-emerald-500" : active ? "bg-emerald-500 scale-125" : "bg-[#e8e0d5]"
     }`} />
   );
 }
@@ -50,8 +50,8 @@ function CategoryPicker({
           onClick={() => onChange(cat)}
           className={`text-xs px-2.5 py-1 rounded-full border transition-all ${
             value === cat
-              ? "bg-amber-500 text-white border-amber-500 font-semibold"
-              : "bg-white border-[#e8e0d5] text-[#8a7a6a] hover:border-amber-300 hover:text-amber-700"
+              ? "bg-emerald-500 text-white border-amber-500 font-semibold"
+              : "bg-white border-[#e8e0d5] text-[#8a7a6a] hover:border-emerald-300 hover:text-emerald-700"
           }`}
         >
           {cat}
@@ -169,7 +169,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
                 <div key={label} className="flex items-center gap-1">
                   <StepDot active={step === i} done={step > i} />
                   {i < stepLabels.length - 1 && (
-                    <div className={`h-px w-4 transition-all ${step > i ? "bg-amber-400" : "bg-white/20"}`} />
+                    <div className={`h-px w-4 transition-all ${step > i ? "bg-emerald-500" : "bg-white/20"}`} />
                   )}
                 </div>
               ))}
@@ -185,7 +185,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
           {step === 0 && !isDone && (
             <div className="space-y-4">
               <div className="flex items-start gap-3">
-                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shrink-0 shadow-sm">
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shrink-0 shadow-sm">
                   <Sparkles className="w-4 h-4 text-white" />
                 </div>
                 <div className="bg-white rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-[#3d3730] border border-[#e8e0d5] shadow-sm leading-relaxed">
@@ -208,7 +208,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
             return (
               <div className="space-y-4">
                 <div className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shrink-0 shadow-sm">
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shrink-0 shadow-sm">
                     <Sparkles className="w-4 h-4 text-white" />
                   </div>
                   <div className="bg-white rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-[#3d3730] border border-[#e8e0d5] shadow-sm">
@@ -224,7 +224,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
                   <CategoryPicker value={d.category} onChange={v => updateDesire(idx, "category", v)} />
                   {!CATEGORY_SUGGESTIONS.includes(d.category) && (
                     <input
-                      className="mt-2 w-full text-sm border border-[#e8e0d5] rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-amber-300"
+                      className="mt-2 w-full text-sm border border-[#e8e0d5] rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-emerald-300"
                       placeholder="Or type your own category..."
                       value={d.category}
                       onChange={e => updateDesire(idx, "category", e.target.value)}
@@ -240,7 +240,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
                     placeholder={`I desire... / I am... / I have...`}
                     value={d.desire}
                     onChange={e => updateDesire(idx, "desire", e.target.value)}
-                    className="resize-none text-sm bg-white border-[#e8e0d5] focus:border-amber-300 rounded-xl"
+                    className="resize-none text-sm bg-white border-[#e8e0d5] focus:border-emerald-300 rounded-xl"
                     rows={3}
                   />
                 </div>
@@ -252,7 +252,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
           {step === 4 && !isDone && (
             <div className="space-y-4">
               <div className="flex items-start gap-3">
-                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shrink-0 shadow-sm">
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shrink-0 shadow-sm">
                   <Sparkles className="w-4 h-4 text-white" />
                 </div>
                 <div className="bg-white rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-[#3d3730] border border-[#e8e0d5] shadow-sm">
@@ -269,7 +269,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
                   placeholder="e.g. I'm not doing enough. I'm falling behind. I'm not good enough..."
                   value={negativeThought}
                   onChange={e => { setNegativeThought(e.target.value); setReframe(""); }}
-                  className="resize-none text-sm bg-white border-[#e8e0d5] focus:border-amber-300 rounded-xl"
+                  className="resize-none text-sm bg-white border-[#e8e0d5] focus:border-emerald-300 rounded-xl"
                   rows={3}
                 />
               </div>
@@ -280,7 +280,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
                   size="sm"
                   onClick={handleGenerateReframe}
                   disabled={isGeneratingReframe}
-                  className="w-full border-amber-200 text-amber-700 hover:bg-amber-50 gap-2"
+                  className="w-full border-emerald-200 text-emerald-700 hover:bg-emerald-50 gap-2"
                 >
                   {isGeneratingReframe ? (
                     <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Zion is reframing...</>
@@ -291,15 +291,15 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
               )}
 
               {reframe && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-                  <div className="text-xs font-semibold text-amber-700 mb-1 flex items-center gap-1">
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
+                  <div className="text-xs font-semibold text-emerald-700 mb-1 flex items-center gap-1">
                     <Star className="w-3 h-3" /> Zion's Reframe
                   </div>
                   <p className="text-sm text-[#3d3730] italic leading-relaxed">{reframe}</p>
                   <button
                     onClick={handleGenerateReframe}
                     disabled={isGeneratingReframe}
-                    className="mt-2 text-xs text-amber-600 hover:text-amber-800 flex items-center gap-1"
+                    className="mt-2 text-xs text-emerald-600 hover:text-emerald-800 flex items-center gap-1"
                   >
                     <RefreshCw className="w-3 h-3" /> Try another reframe
                   </button>
@@ -312,7 +312,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
           {isDone && (
             <div className="space-y-4">
               <div className="flex items-center justify-center">
-                <div className="w-14 h-14 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg">
+                <div className="w-14 h-14 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shadow-lg">
                   <CheckCircle2 className="w-7 h-7 text-white" />
                 </div>
               </div>
@@ -325,7 +325,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
               <div className="bg-white rounded-xl border border-[#e8e0d5] divide-y divide-[#e8e0d5]">
                 {desires.map((d, i) => (
                   <div key={i} className="px-4 py-2.5">
-                    <span className="text-[10px] font-semibold text-amber-600 uppercase tracking-wide">{d.category}</span>
+                    <span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wide">{d.category}</span>
                     <p className="text-sm text-[#3d3730] mt-0.5">{d.desire}</p>
                   </div>
                 ))}
@@ -339,7 +339,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
 
               {zionMessage && (
                 <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shrink-0 shadow-sm">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shrink-0 shadow-sm">
                     <Sparkles className="w-3.5 h-3.5 text-white" />
                   </div>
                   <div className="bg-white rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-[#3d3730] border border-[#e8e0d5] shadow-sm leading-relaxed italic">
@@ -370,7 +370,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
                   size="sm"
                   onClick={() => setStep(s => s + 1)}
                   disabled={!canAdvance()}
-                  className="bg-gradient-to-r from-amber-400 to-orange-500 text-white border-0 gap-1 hover:opacity-90"
+                  className="bg-gradient-to-r from-emerald-500 to-green-600 text-white border-0 gap-1 hover:opacity-90"
                 >
                   {step === 0 ? "Begin Ritual" : "Next"}
                   <ChevronRight className="w-4 h-4" />
@@ -380,7 +380,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
                   size="sm"
                   onClick={handleFinish}
                   disabled={isSaving}
-                  className="bg-gradient-to-r from-amber-400 to-orange-500 text-white border-0 gap-1 hover:opacity-90"
+                  className="bg-gradient-to-r from-emerald-500 to-green-600 text-white border-0 gap-1 hover:opacity-90"
                 >
                   {isSaving ? (
                     <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</>
@@ -392,7 +392,7 @@ export default function NightReflectionModal({ open, onClose, date }: Props) {
             </>
           ) : (
             <Button
-              className="w-full bg-gradient-to-r from-amber-400 to-orange-500 text-white border-0 hover:opacity-90"
+              className="w-full bg-gradient-to-r from-emerald-500 to-green-600 text-white border-0 hover:opacity-90"
               onClick={onClose}
             >
               Sweet dreams 🌙
