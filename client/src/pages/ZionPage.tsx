@@ -156,23 +156,38 @@ function ActionCardsGroup({
   const now = new Date();
   type CardState = { saved: boolean; saving: boolean; navPath?: string; target?: string };
   const [states, setStates] = useState<Record<number, CardState>>({});
+  const utils = trpc.useUtils();
+  const [, navigate] = useLocation();
+
+  // Invalidate all planner queries so views refresh instantly after save
+  const invalidatePlannerQueries = () => {
+    utils.weekly.invalidate();
+    utils.monthly.invalidate();
+    utils.daily.invalidate();
+    utils.bigGoals.invalidate();
+    utils.annual.invalidate();
+    utils.notes.invalidate();
+  };
 
   const saveMutation = trpc.zion.saveParsedItem.useMutation({
     onSuccess: (data, _vars, context: any) => {
       const idx = context?.idx as number;
+      const navPath = (data as any).navPath;
       setStates(prev => ({
         ...prev,
-        [idx]: { saved: true, saving: false, navPath: (data as any).navPath, target: data.target },
+        [idx]: { saved: true, saving: false, navPath, target: data.target },
       }));
-      toast.success(`Saved to ${data.target}!`, {
-        description: (data as any).navPath ? "Click the link on the card to view it." : undefined,
+      invalidatePlannerQueries();
+      toast.success(`✅ Saved to ${data.target}!`, {
+        description: navPath ? "Tap 'View' on the card to go there." : undefined,
         duration: 4000,
       });
     },
     onError: (err, _vars, context: any) => {
       const idx = context?.idx as number;
       setStates(prev => ({ ...prev, [idx]: { saved: false, saving: false } }));
-      toast.error(`Could not save: ${err.message}`);
+      console.error("[Zion Save]", err);
+      toast.error(`Could not save: ${err.message}`, { duration: 6000 });
     },
   });
 
@@ -193,6 +208,9 @@ function ActionCardsGroup({
   const unsavedCount = actions.filter((_, i) => !states[i]?.saved).length;
   const allSaved = unsavedCount === 0;
 
+  // After all items saved, find the best navPath to go to
+  const firstNavPath = Object.values(states).find(s => s.saved && s.navPath)?.navPath;
+
   return (
     <div className="w-full mt-1 space-y-1">
       <div className="flex items-center justify-between px-1">
@@ -212,9 +230,19 @@ function ActionCardsGroup({
           </Button>
         )}
         {allSaved && (
-          <span className="text-[10px] text-green-600 font-semibold flex items-center gap-1">
-            <CheckCircle2 className="w-3 h-3" /> All saved!
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-green-600 font-semibold flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3" /> All saved!
+            </span>
+            {firstNavPath && (
+              <button
+                onClick={() => navigate(firstNavPath)}
+                className="text-[10px] px-2 py-0.5 rounded-full bg-green-50 border border-green-200 text-green-700 font-semibold flex items-center gap-1 hover:bg-green-100 transition-colors"
+              >
+                View in Planner <ExternalLink className="w-2.5 h-2.5" />
+              </button>
+            )}
+          </div>
         )}
       </div>
       {actions.map((action, i) => (
