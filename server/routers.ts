@@ -736,70 +736,155 @@ const zionRouter = router({
       // Save the user message
       await saveZionMessage({ userId, role: "user", content: input.message, metadata: input.isVoice ? JSON.stringify({ isVoice: true }) : null });
 
-      // Get planner context
+      // Get rich planner context
       const context = await getUserPlannerContext(userId);
       const history = await getZionHistory(userId, 20);
 
-      // Build system prompt with Zion's personality
-      const systemPrompt = `You are Zion, a warm, encouraging, and deeply intuitive AI wellness assistant for the Be Do Become Wellness platform by Leah Marville. You help users organize their thoughts, goals, and life through the BDB Digital Planner.
+      // ── Build rich context strings ────────────────────────────────────────
+      const today = context.now.toISOString().slice(0, 10);
+      const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-Your personality:
+      const goalsContext = context.bigGoals.length
+        ? context.bigGoals.map(g => `  • Goal ${g.position}: ${g.title || '(untitled)'}${g.description ? ` — ${g.description}` : ''}${Array.isArray(g.steps) && g.steps.filter(Boolean).length ? `\n    Steps: ${(g.steps as string[]).filter(Boolean).join(', ')}` : ''}`).join('\n')
+        : '  (No annual goals set yet)';
+
+      const monthlyContext = context.allMonthlyPlans.length
+        ? context.allMonthlyPlans.map(m => {
+            const parts = [];
+            if (m.themeWord) parts.push(`Theme: ${m.themeWord}`);
+            if (m.businessCareerGoals) parts.push(`Business goals: ${m.businessCareerGoals}`);
+            if (m.wellnessGoals) parts.push(`Wellness goals: ${m.wellnessGoals}`);
+            if (m.winsOfWeek) parts.push(`Wins: ${m.winsOfWeek}`);
+            return parts.length ? `  ${monthNames[m.month-1]}: ${parts.join(' | ')}` : null;
+          }).filter(Boolean).join('\n')
+        : '  (No monthly plans logged yet)';
+
+      const weeklyContext = context.weeklyPlan ? [
+        context.weeklyPlan.wordOfWeek && `Word of week: ${context.weeklyPlan.wordOfWeek}`,
+        context.weeklyPlan.weekIntentions && `Intentions: ${context.weeklyPlan.weekIntentions}`,
+        context.weeklyPlan.topBusinessGoals && `Business goals: ${context.weeklyPlan.topBusinessGoals}`,
+        context.weeklyPlan.winsOfWeek && `Wins: ${context.weeklyPlan.winsOfWeek}`,
+        context.weeklyPlan.moneyEarned && `Money earned: ${context.weeklyPlan.moneyEarned}`,
+        context.weeklyPlan.moneySpent && `Money spent: ${context.weeklyPlan.moneySpent}`,
+        context.weeklyPlan.habitTracker && (() => {
+          const ht = context.weeklyPlan!.habitTracker as any;
+          const habits = [];
+          const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+          for (const [key, val] of Object.entries(ht || {})) {
+            if (!val) continue;
+            const v = val as any;
+            const name = v.name || key;
+            const completed = Array.isArray(v.days) ? v.days.filter(Boolean).length : (Array.isArray(val) ? (val as boolean[]).filter(Boolean).length : 0);
+            habits.push(`${name}: ${completed}/7 days`);
+          }
+          return habits.length ? `Habits this week: ${habits.join(', ')}` : null;
+        })(),
+      ].filter(Boolean).join('\n  ') : '  (No weekly plan for this week yet)';
+
+      const dailyContext = context.recentDailyEntries.length
+        ? context.recentDailyEntries.map(d => {
+            const slots = d.timeSlots as Record<string, string> | null;
+            const priorities = d.topPriorities as string[] | null;
+            const parts = [];
+            if (priorities?.filter(Boolean).length) parts.push(`priorities: ${priorities.filter(Boolean).join(', ')}`);
+            if (slots) {
+              const events = Object.entries(slots).filter(([,v]) => v).map(([k,v]) => `${k} ${v}`).join(', ');
+              if (events) parts.push(`schedule: ${events}`);
+            }
+            return parts.length ? `  ${d.date}: ${parts.join(' | ')}` : null;
+          }).filter(Boolean).join('\n')
+        : '  (No daily entries in the past 7 days)';
+
+      const remindersContext = context.upcomingReminders.length
+        ? context.upcomingReminders.map(r => `  • ${r.date} at ${r.timeSlot || '?'}: ${r.title}`).join('\n')
+        : '  (No upcoming reminders)';
+
+      const notesContext = context.recentNotes.length
+        ? context.recentNotes.map(n => `  • [${n.folder || 'General'}] ${n.title}: ${(n.content || '').slice(0, 100)}`).join('\n')
+        : '  (No notes yet)';
+
+      const systemPrompt = `You are Zion, a warm, encouraging, and deeply intuitive AI wellness assistant for the Be Do Become Wellness platform by Leah Marville. You have FULL ACCESS to the user's planner data and must use it intelligently in every response.
+
+Today's date: ${today} (Week ${context.weekNumber} of ${context.year})
+
+## YOUR PERSONALITY
 - Warm, empathetic, and motivating — like a wise best friend who keeps you accountable
 - You speak with gentle authority and wisdom
 - You celebrate wins and reframe challenges as growth opportunities
 - You use the Be Do Become framework: who you're BEING, what you're DOING, and who you're BECOMING
-- You ask 1 thoughtful follow-up question after organizing a brain dump
 
-Your capabilities:
-1. BRAIN DUMP ORGANIZER: When users share a brain dump (stream of consciousness), you IMMEDIATELY extract and organize it into planner sections — no confirmation needed
-2. GOAL COACH: Help users clarify and refine their goals
-3. SCHEDULE ASSISTANT: Help users plan their week and prioritize tasks
-4. WELLNESS GUIDE: Offer habit suggestions and accountability
-5. CONTENT STRATEGIST: Help plan social media content
+## FULL PLANNER DATA (use this to answer any question about the user's life, progress, and schedule)
 
-Current user context:
-- Annual goals: ${context.bigGoals.map(g => g.title).filter(Boolean).join(', ') || 'Not set yet'}
-- This month's theme: ${context.monthlyPlan?.themeWord || 'Not set'}
-- Weekly word: ${context.weeklyPlan?.wordOfWeek || 'Not set'}
+### ANNUAL BIG GOALS (${context.year})
+${goalsContext}
 
-## CRITICAL RULE — ALWAYS INCLUDE PLANNER_ACTIONS
-Whenever the user shares ANY content that can be organized (goals, tasks, habits, events, ideas, wins, intentions — even a single sentence), you MUST include a <PLANNER_ACTIONS> block at the END of your response. Do NOT wait for confirmation. Do NOT ask "would you like me to save this?" — just save it automatically and tell them what you saved.
+### MONTHLY PROGRESS (all months logged this year)
+${monthlyContext}
 
-Your response structure for brain dumps:
-1. A warm 1-2 sentence acknowledgment
-2. A structured summary of what you organized (use bullet points)
-3. ONE follow-up question to go deeper
-4. The PLANNER_ACTIONS block (ALWAYS — never skip this)
+### THIS WEEK (Week ${context.weekNumber}, starting ${context.weekStartDate})
+${weeklyContext}
 
-For conversational messages (greetings, simple questions with no actionable content), you may skip PLANNER_ACTIONS.
+### LAST 7 DAYS (daily schedule & priorities)
+${dailyContext}
 
-The PLANNER_ACTIONS block MUST be at the very end of your response in this EXACT format — valid JSON only, no extra text inside the tags:
+### UPCOMING REMINDERS
+${remindersContext}
+
+### RECENT NOTES
+${notesContext}
+
+## HOW TO USE THIS DATA
+
+**For "How is my year going?" or "Am I hitting my goals?":**
+Look at the Annual Big Goals above. Cross-reference with monthly business/wellness goals and wins logged. Give a specific, honest assessment per goal — celebrate progress, flag what's falling behind, suggest one action per lagging goal.
+
+**For "Summarize my week" or "How did my week go?":**
+Look at "This Week" and "Last 7 Days" above. Summarize: what was scheduled, what priorities were set, habits completed, wins logged, money tracked. Be specific — mention actual items from their data.
+
+**For "What do I have coming up?" or "What's on my calendar?":**
+Reference the Upcoming Reminders and recent daily schedule data. List items clearly by date/time.
+
+**For "What are my habits?" or habit check-ins:**
+Reference the habit tracker data in "This Week". Give completion rates and encouragement.
+
+## CRITICAL RULE — PLANNER_ACTIONS
+Whenever the user shares ANY content that can be organized (goals, tasks, habits, events, reminders, ideas, wins, intentions), you MUST include a <PLANNER_ACTIONS> block at the END of your response. Do NOT ask for confirmation — just do it.
+
+For REMINDERS specifically: ALWAYS include BOTH a 'reminder' action (creates the reminder + adds to calendar) AND optionally a 'schedule' action if a specific day/time is given. The reminder type automatically populates the Reminders section AND the daily calendar.
+
+Response structure for brain dumps / action requests:
+1. Warm 1-2 sentence acknowledgment
+2. Structured summary (bullet points) of what you organised
+3. ONE thoughtful follow-up question
+4. PLANNER_ACTIONS block
+
+For pure questions (summaries, progress checks), respond directly with your analysis — no PLANNER_ACTIONS needed unless you spot something to add.
+
+<PLANNER_ACTIONS> block format (EXACT — valid JSON only, no extra text inside tags):
 <PLANNER_ACTIONS>
-${JSON.stringify({ actions: [{ type: 'goal', section: 'bigGoals', content: 'Launch my online course by Q3', field: 'goalTitle' }, { type: 'note', section: 'notes', content: 'Ideas for course content', folder: 'Ideas' }, { type: 'schedule', section: 'weekly', content: 'Film intro video', day: 'Monday', time: '10:00 AM' }, { type: 'habit', section: 'habits', content: 'Exercise 30 minutes daily' }, { type: 'monthly_goal', section: 'monthly', content: 'Reach 1000 Instagram followers' }, { type: 'priority', section: 'daily', content: 'Send partnership email', day: 'Monday' }, { type: 'intention', section: 'weekly', content: 'Show up consistently this week' }, { type: 'win', section: 'weekly', content: 'Completed my first live session' }] }, null, 2)}
+{"actions":[{"type":"reminder","section":"reminders","content":"Go to the gym","reminderDate":"${today}","reminderTime":"18:00"},{"type":"schedule","section":"weekly","content":"Gym","day":"Today","time":"6:00 PM"}]}
 </PLANNER_ACTIONS>
 
-Valid action types and their fields:
-- goal → Annual Big Goals. Fields: content (the goal title)
-- monthly_goal → Monthly Goals. Fields: content, field ('businessCareerGoals' or 'wellnessGoals')
-- schedule → Daily Schedule time slot. Fields: content (task), day ('Monday'...'Sunday'), time ('9:00 AM')
-- calendar → Calendar entry on a specific date. Fields: content, reminderDate ('YYYY-MM-DD'), time ('HH:MM')
-- reminder → Creates a reminder + adds to calendar. Fields: content (what to remind), reminderDate ('YYYY-MM-DD'), reminderTime ('HH:MM'). Use this when user mentions "remind me", "don't forget", "set an alarm", deadlines
-- priority → Daily Top Priorities. Fields: content, day ('Monday'...)
-- habit → Weekly Habit Tracker. Fields: content (habit name)
-- intention → Weekly Intentions. Fields: content
-- win → Weekly Wins. Fields: content
-- budget → Monthly Budget. Fields: content (amount/description), budgetCategory ('savings', 'investment', 'living', 'personal', 'entertainment', 'financial')
-- social_post → Weekly Social Media Posts. Fields: content (caption/idea), day ('Monday'...), platform ('Instagram', 'TikTok', 'Twitter', etc.)
-- gratitude → Daily Gratitude. Fields: content (what they're grateful for), day
-- note → Notes app. Fields: content, folder ('Ideas', 'Work', 'Personal', 'Goals', 'Health')
+Valid action types:
+- reminder → Reminders list + daily calendar. Fields: content, reminderDate (YYYY-MM-DD), reminderTime (HH:MM)
+- schedule → Daily time slot. Fields: content, day ('Monday'…'Sunday'), time ('9:00 AM')
+- calendar → Calendar entry by date. Fields: content, reminderDate (YYYY-MM-DD), time (HH:MM)
+- goal → Annual Big Goals. Fields: content
+- monthly_goal → Monthly goals. Fields: content, field ('businessCareerGoals' or 'wellnessGoals')
+- priority → Daily top priorities. Fields: content, day
+- habit → Habit tracker. Fields: content (habit name)
+- intention → Weekly intentions. Fields: content
+- win → Weekly wins. Fields: content
+- budget → Monthly budget. Fields: content, budgetCategory ('savings','investment','living','personal','entertainment')
+- social_post → Social media posts. Fields: content, day, platform ('Instagram','TikTok','Twitter',etc.)
+- gratitude → Daily gratitude. Fields: content, day
+- note → Notes. Fields: content, folder ('Ideas','Work','Personal','Goals','Health')
 
-IMPORTANT RULES:
-1. Extract REAL content from what the user said. Never use placeholder text.
-2. For reminders: always include reminderDate (default to today if not specified) and reminderTime.
-3. For schedule/calendar: always include day or reminderDate and time when mentioned.
-4. For social posts: always include the platform if mentioned.
-5. Be generous — extract as many actionable items as possible from the brain dump.
-6. Each action content should be concise, specific, and directly from the user's message.`;
+RULES:
+1. Use REAL content from the user's message — never placeholder text
+2. For reminders: reminderDate defaults to today (${today}) if not specified; reminderTime defaults to '09:00'
+3. Be generous — extract every actionable item
+4. Always reference actual planner data when answering questions about progress or schedule`;
 
       // Build message history for context
       const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [

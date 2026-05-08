@@ -929,36 +929,64 @@ export async function clearZionHistory(userId: number): Promise<void> {
   await db.delete(zionMessages).where(eq(zionMessages.userId, userId));
 }
 
-export async function getUserPlannerContext(userId: number): Promise<{
-  annualPlan: AnnualPlan | null;
-  bigGoals: BigGoal[];
-  monthlyPlan: MonthlyPlan | null;
-  weeklyPlan: WeeklyPlan | null;
-  recentDailyEntries: DailyEntry[];
-}> {
+export async function getUserPlannerContext(userId: number) {
   const db = await getDb();
-  if (!db) return { annualPlan: null, bigGoals: [], monthlyPlan: null, weeklyPlan: null, recentDailyEntries: [] };
+  if (!db) return {
+    annualPlan: null, bigGoals: [], allMonthlyPlans: [], monthlyPlan: null,
+    weeklyPlan: null, recentDailyEntries: [], upcomingReminders: [], recentNotes: [],
+    now: new Date(), year: new Date().getFullYear(), month: new Date().getMonth() + 1,
+    weekNumber: 1, weekStartDate: '',
+  };
 
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
-  const weekStart = new Date(now);
-  weekStart.setDate(now.getDate() - now.getDay());
 
-  const [annualRows, goalsRows, monthlyRows, weeklyRows, dailyRows] = await Promise.all([
+  // ISO week number
+  const getISOWeek = (d: Date) => {
+    const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  };
+  const weekNumber = getISOWeek(now);
+
+  // Monday of current ISO week
+  const day = now.getDay() || 7;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - day + 1);
+  const weekStartDate = monday.toISOString().slice(0, 10);
+
+  // 7 days ago and 14 days ahead for reminders
+  const sevenDaysAgo = new Date(now); sevenDaysAgo.setDate(now.getDate() - 7);
+  const fourteenDaysAhead = new Date(now); fourteenDaysAhead.setDate(now.getDate() + 14);
+
+  const [annualRows, goalsRows, allMonthlyRows, weeklyRows, dailyRows, reminderRows, noteRows] = await Promise.all([
     db.select().from(annualPlans).where(and(eq(annualPlans.userId, userId), eq(annualPlans.year, year))).limit(1),
-    db.select().from(bigGoals).where(and(eq(bigGoals.userId, userId), eq(bigGoals.year, year))).limit(10),
-    db.select().from(monthlyPlans).where(and(eq(monthlyPlans.userId, userId), eq(monthlyPlans.year, year), eq(monthlyPlans.month, month))).limit(1),
-    db.select().from(weeklyPlans).where(and(eq(weeklyPlans.userId, userId), eq(weeklyPlans.year, year), eq(weeklyPlans.weekStartDate, weekStart.toISOString().split('T')[0]))).limit(1),
-    db.select().from(dailyEntries).where(eq(dailyEntries.userId, userId)).orderBy(dailyEntries.date).limit(7),
+    db.select().from(bigGoals).where(and(eq(bigGoals.userId, userId), eq(bigGoals.year, year))).orderBy(bigGoals.position),
+    db.select().from(monthlyPlans).where(and(eq(monthlyPlans.userId, userId), eq(monthlyPlans.year, year))).orderBy(monthlyPlans.month),
+    db.select().from(weeklyPlans).where(and(eq(weeklyPlans.userId, userId), eq(weeklyPlans.year, year), eq(weeklyPlans.weekNumber, weekNumber))).limit(1),
+    db.select().from(dailyEntries).where(and(eq(dailyEntries.userId, userId), gte(dailyEntries.date, sevenDaysAgo.toISOString().slice(0, 10)))).orderBy(dailyEntries.date),
+    db.select().from(reminders).where(and(eq(reminders.userId, userId), eq(reminders.sent, false), lte(reminders.reminderAt, fourteenDaysAhead))).orderBy(reminders.reminderAt).limit(20),
+    db.select().from(notes).where(eq(notes.userId, userId)).orderBy(notes.updatedAt).limit(10),
   ]);
+
+  const currentMonthPlan = allMonthlyRows.find(m => m.month === month) ?? null;
 
   return {
     annualPlan: annualRows[0] ?? null,
     bigGoals: goalsRows,
-    monthlyPlan: monthlyRows[0] ?? null,
+    allMonthlyPlans: allMonthlyRows,
+    monthlyPlan: currentMonthPlan,
     weeklyPlan: weeklyRows[0] ?? null,
     recentDailyEntries: dailyRows,
+    upcomingReminders: reminderRows,
+    recentNotes: noteRows,
+    now,
+    year,
+    month,
+    weekNumber,
+    weekStartDate,
   };
 }
 
