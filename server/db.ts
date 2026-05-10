@@ -1073,3 +1073,97 @@ export async function markReminderSent(id: number): Promise<void> {
   if (!db) return;
   await db.update(reminders).set({ sent: true }).where(eq(reminders.id, id));
 }
+
+// ─── Global Search ────────────────────────────────────────────────────────────
+
+export type SearchResultItem = {
+  id: string;
+  type: "note" | "attachment" | "goal" | "reminder" | "todo";
+  title: string;
+  excerpt?: string;
+  meta?: string;        // e.g. file type, date, section name
+  navPath?: string;     // where to navigate on click
+  fileUrl?: string;     // for attachments — direct open link
+  fileType?: string;
+};
+
+export async function globalSearch(userId: number, query: string): Promise<SearchResultItem[]> {
+  const db = await getDb();
+  if (!db || !query.trim()) return [];
+  const q = query.trim();
+  const results: SearchResultItem[] = [];
+
+  await Promise.all([
+    // ── Notes ──────────────────────────────────────────────────────────────────
+    db.select().from(notes)
+      .where(and(eq(notes.userId, userId), or(like(notes.title, `%${q}%`), like(notes.content, `%${q}%`))))
+      .limit(10)
+      .then(rows => rows.forEach(n => results.push({
+        id: `note-${n.id}`,
+        type: "note",
+        title: n.title,
+        excerpt: n.content?.replace(/<[^>]+>/g, "").slice(0, 120),
+        meta: n.folder || "Notes",
+        navPath: `/notes`,
+      }))),
+
+    // ── Section attachments (PDFs, images, links) ──────────────────────────────
+    db.select().from(sectionAttachments)
+      .where(and(eq(sectionAttachments.userId, userId), like(sectionAttachments.fileName, `%${q}%`)))
+      .limit(15)
+      .then(rows => rows.forEach(a => {
+        const sectionLabel = a.sectionKey
+          .replace(/^annual-\d+-/, "Annual: ")
+          .replace(/^monthly-\d+-\d+-/, "Monthly: ")
+          .replace(/^weekly-\d+-\d+-/, "Weekly: ")
+          .replace(/-/g, " ")
+          .replace(/\b\w/g, c => c.toUpperCase());
+        results.push({
+          id: `att-${a.id}`,
+          type: "attachment",
+          title: a.fileName,
+          meta: sectionLabel,
+          fileUrl: a.fileUrl,
+          fileType: a.fileType,
+          navPath: a.section === "annual" ? "/annual" : undefined,
+        });
+      })),
+
+    // ── Big Goals ──────────────────────────────────────────────────────────────
+    db.select().from(bigGoals)
+      .where(and(eq(bigGoals.userId, userId), or(like(bigGoals.title, `%${q}%`), like(bigGoals.description, `%${q}%`))))
+      .limit(6)
+      .then(rows => rows.forEach(g => results.push({
+        id: `goal-${g.id}`,
+        type: "goal",
+        title: g.title || `Big Goal ${g.position}`,
+        excerpt: g.description?.slice(0, 120) ?? undefined,
+        meta: `${g.year} · Goal ${g.position}`,
+        navPath: `/annual`,
+      }))),
+
+    // ── Reminders ──────────────────────────────────────────────────────────────
+    db.select().from(reminders)
+      .where(and(eq(reminders.userId, userId), like(reminders.title, `%${q}%`)))
+      .orderBy(reminders.reminderAt)
+      .limit(10)
+      .then(rows => rows.forEach(r => results.push({
+        id: `reminder-${r.id}`,
+        type: "reminder",
+        title: r.title,
+        meta: `${r.date}${r.timeSlot ? " at " + r.timeSlot : ""}`,
+        navPath: r.date ? `/weekly/${new Date(r.date).getFullYear()}/${getISOWeekOfDate(r.date)}` : undefined,
+      }))),
+  ]);
+
+  return results;
+}
+
+function getISOWeekOfDate(dateStr: string): number {
+  const d = new Date(dateStr);
+  const jan4 = new Date(d.getFullYear(), 0, 4);
+  const startOfWeek1 = new Date(jan4);
+  startOfWeek1.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7));
+  const diff = d.getTime() - startOfWeek1.getTime();
+  return Math.ceil((diff / 86400000 + 1) / 7);
+}

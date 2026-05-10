@@ -30,6 +30,7 @@ import AIDigestPanel from "./AIDigestPanel";
 import NightReflectionModal from "./NightReflectionModal";
 import DailyDevotionModal from "./DailyDevotionModal";
 import RemindersPanel from "./RemindersPanel";
+import GlobalSearch from "./GlobalSearch";
 import { trpc } from "@/lib/trpc";
 import { useReminderNotifications } from "@/hooks/useReminderNotifications";
 
@@ -156,6 +157,9 @@ export default function PlannerLayout({
           <X size={16} />
         </button>
       </div>
+
+      {/* Search */}
+      {sidebarOpen && <GlobalSearch inline />}
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-2 py-4 space-y-1">

@@ -52,6 +52,7 @@ import {
   createReminder,
   deleteReminder,
   markReminderSent,
+  globalSearch,
 } from "./db";
 import bcrypt from "bcryptjs";
 
@@ -1731,5 +1732,10 @@ export const appRouter = router({
   reminders: remindersRouter,
   slack: slackRouter,
   googleCalendar: googleCalendarRouter,
+  search: router({
+    global: protectedProcedure
+      .input(z.object({ query: z.string().min(1).max(200) }))
+      .query(async ({ ctx, input }) => globalSearch(ctx.user.id, input.query)),
+  }),
 });
 export type AppRouter = typeof appRouter;
