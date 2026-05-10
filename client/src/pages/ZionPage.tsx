@@ -45,20 +45,21 @@ const ACTION_META: Record<string, {
   label: string;
   color: string;
   navHint: string;
+  defaultNavPath?: string; // where clicking the label takes you before saved
 }> = {
-  goal:         { icon: <Target className="w-3.5 h-3.5" />,    label: "Big Goal",       color: "bg-purple-50 text-purple-700 border-purple-200",  navHint: "Annual Planning → Big Goals" },
-  note:         { icon: <BookOpen className="w-3.5 h-3.5" />,  label: "Note",           color: "bg-blue-50 text-blue-700 border-blue-200",        navHint: "Notes" },
-  schedule:     { icon: <Calendar className="w-3.5 h-3.5" />,  label: "Schedule",       color: "bg-green-50 text-green-700 border-green-200",     navHint: "Weekly View → Schedule" },
-  calendar:     { icon: <Calendar className="w-3.5 h-3.5" />,  label: "Calendar",       color: "bg-teal-50 text-teal-700 border-teal-200",        navHint: "Weekly View → Schedule" },
-  habit:        { icon: <Heart className="w-3.5 h-3.5" />,     label: "Habit",          color: "bg-pink-50 text-pink-700 border-pink-200",        navHint: "Weekly View → Habits" },
-  monthly_goal: { icon: <BarChart2 className="w-3.5 h-3.5" />, label: "Monthly Goal",   color: "bg-emerald-50 text-emerald-700 border-emerald-200",     navHint: "Monthly View → Goals" },
-  priority:     { icon: <Target className="w-3.5 h-3.5" />,    label: "Priority",       color: "bg-emerald-50 text-emerald-700 border-emerald-200",  navHint: "Weekly View → Priorities" },
-  intention:    { icon: <Sparkles className="w-3.5 h-3.5" />,  label: "Intention",      color: "bg-violet-50 text-violet-700 border-violet-200",  navHint: "Weekly View → Intentions" },
-  win:          { icon: <CheckCircle2 className="w-3.5 h-3.5" />, label: "Win",         color: "bg-emerald-50 text-emerald-700 border-emerald-200", navHint: "Weekly View → Wins" },
-  reminder:     { icon: <Bell className="w-3.5 h-3.5" />,      label: "Reminder",       color: "bg-red-50 text-red-700 border-red-200",           navHint: "Weekly View → Schedule" },
-  budget:       { icon: <DollarSign className="w-3.5 h-3.5" />, label: "Budget",        color: "bg-lime-50 text-lime-700 border-lime-200",        navHint: "Monthly View → Budget" },
-  social_post:  { icon: <Share2 className="w-3.5 h-3.5" />,    label: "Social Post",    color: "bg-sky-50 text-sky-700 border-sky-200",           navHint: "Weekly View → Social Posts" },
-  gratitude:    { icon: <Smile className="w-3.5 h-3.5" />,     label: "Gratitude",      color: "bg-yellow-50 text-yellow-700 border-yellow-200",  navHint: "Weekly View → Gratitude" },
+  goal:         { icon: <Target className="w-3.5 h-3.5" />,    label: "Big Goal",    color: "bg-purple-50 text-purple-700 border-purple-200",   navHint: "Annual Planning",        defaultNavPath: "/annual" },
+  note:         { icon: <BookOpen className="w-3.5 h-3.5" />,  label: "Note",        color: "bg-blue-50 text-blue-700 border-blue-200",         navHint: "Notes",                  defaultNavPath: "/notes" },
+  schedule:     { icon: <Calendar className="w-3.5 h-3.5" />,  label: "Schedule",    color: "bg-green-50 text-green-700 border-green-200",      navHint: "Weekly View",            defaultNavPath: "/weekly" },
+  calendar:     { icon: <Calendar className="w-3.5 h-3.5" />,  label: "Calendar",    color: "bg-teal-50 text-teal-700 border-teal-200",         navHint: "Weekly View",            defaultNavPath: "/weekly" },
+  habit:        { icon: <Heart className="w-3.5 h-3.5" />,     label: "Habit",       color: "bg-pink-50 text-pink-700 border-pink-200",         navHint: "Weekly View → Habits",   defaultNavPath: "/weekly" },
+  monthly_goal: { icon: <BarChart2 className="w-3.5 h-3.5" />, label: "Monthly Goal",color: "bg-emerald-50 text-emerald-700 border-emerald-200",navHint: "Monthly View",           defaultNavPath: "/monthly" },
+  priority:     { icon: <Target className="w-3.5 h-3.5" />,    label: "Priority",    color: "bg-emerald-50 text-emerald-700 border-emerald-200",navHint: "Weekly View",            defaultNavPath: "/weekly" },
+  intention:    { icon: <Sparkles className="w-3.5 h-3.5" />,  label: "Intention",   color: "bg-violet-50 text-violet-700 border-violet-200",   navHint: "Weekly View",            defaultNavPath: "/weekly" },
+  win:          { icon: <CheckCircle2 className="w-3.5 h-3.5" />, label: "Win",      color: "bg-emerald-50 text-emerald-700 border-emerald-200",navHint: "Weekly View → Wins",     defaultNavPath: "/weekly" },
+  reminder:     { icon: <Bell className="w-3.5 h-3.5" />,      label: "Reminder",    color: "bg-red-50 text-red-700 border-red-200",            navHint: "Reminders",              defaultNavPath: "/weekly" },
+  budget:       { icon: <DollarSign className="w-3.5 h-3.5" />, label: "Budget",     color: "bg-lime-50 text-lime-700 border-lime-200",         navHint: "Monthly View → Budget",  defaultNavPath: "/monthly" },
+  social_post:  { icon: <Share2 className="w-3.5 h-3.5" />,    label: "Social Post", color: "bg-sky-50 text-sky-700 border-sky-200",            navHint: "Weekly View",            defaultNavPath: "/weekly" },
+  gratitude:    { icon: <Smile className="w-3.5 h-3.5" />,     label: "Gratitude",   color: "bg-yellow-50 text-yellow-700 border-yellow-200",   navHint: "Weekly View → Gratitude",defaultNavPath: "/weekly" },
 };
 
 // ── Build save payload from action + date context ─────────────────────────────
@@ -95,35 +96,52 @@ function ActionCard({
   savedState: { saved: boolean; saving: boolean; navPath?: string; target?: string } | undefined;
   onSave: (action: PlannerAction) => void;
 }) {
+  const [, navigate] = useLocation();
   const meta = ACTION_META[action.type] ?? ACTION_META.note;
   const saved = savedState?.saved ?? false;
   const saving = savedState?.saving ?? false;
+  // After save, use the returned navPath; before save, use the default for the type
+  const navPath = savedState?.navPath ?? meta.defaultNavPath;
+
+  const handleLabelClick = () => {
+    if (navPath) navigate(navPath);
+  };
 
   return (
     <div className={`flex items-start gap-2 p-2.5 rounded-lg border text-xs ${meta.color} mt-1`}>
       <div className="mt-0.5 shrink-0">{meta.icon}</div>
       <div className="flex-1 min-w-0">
-        <div className="font-semibold mb-0.5">{meta.label}</div>
+        {/* Clickable label — navigates to the right planner section */}
+        <button
+          onClick={handleLabelClick}
+          className="font-semibold mb-0.5 flex items-center gap-1 hover:underline underline-offset-2 cursor-pointer text-left"
+          title={`View in ${meta.navHint}`}
+        >
+          {meta.label}
+          <ExternalLink className="w-2.5 h-2.5 opacity-50" />
+        </button>
         <div className="line-clamp-2 opacity-80">{action.content}</div>
-        {action.day && (
+        {(action.day || action.reminderDate) && (
           <div className="opacity-60 mt-0.5">
             {action.day}{action.time && ` at ${action.time}`}
-            {action.reminderDate && ` · ${action.reminderDate}`}
+            {action.reminderDate && !action.day && action.reminderDate}
+            {action.reminderTime && !action.time && ` at ${action.reminderTime}`}
           </div>
         )}
         {action.platform && <div className="opacity-60 mt-0.5">Platform: {action.platform}</div>}
         {action.folder && <div className="opacity-60 mt-0.5">Folder: {action.folder}</div>}
         {action.budgetCategory && <div className="opacity-60 mt-0.5">Category: {action.budgetCategory}</div>}
         {saved && savedState?.target && (
-          <div className="mt-1 flex items-center gap-1.5 text-green-700 font-medium flex-wrap">
+          <div className="mt-1.5 flex items-center gap-1.5 text-green-700 font-medium flex-wrap">
             <CheckCircle2 className="w-3 h-3 shrink-0" />
-            <span>Saved to {savedState.target}</span>
-            {savedState.navPath && (
-              <Link href={savedState.navPath}>
-                <span className="inline-flex items-center gap-0.5 underline underline-offset-2 cursor-pointer hover:opacity-70">
-                  View <ExternalLink className="w-2.5 h-2.5" />
-                </span>
-              </Link>
+            <span>{savedState.target}</span>
+            {navPath && (
+              <button
+                onClick={handleLabelClick}
+                className="inline-flex items-center gap-0.5 underline underline-offset-2 cursor-pointer hover:opacity-70"
+              >
+                View in planner <ExternalLink className="w-2.5 h-2.5" />
+              </button>
             )}
           </div>
         )}
@@ -169,32 +187,27 @@ function ActionCardsGroup({
     utils.notes.invalidate();
   };
 
-  const saveMutation = trpc.zion.saveParsedItem.useMutation({
-    onSuccess: (data, _vars, context: any) => {
-      const idx = context?.idx as number;
-      const navPath = (data as any).navPath;
-      setStates(prev => ({
-        ...prev,
-        [idx]: { saved: true, saving: false, navPath, target: data.target },
-      }));
-      invalidatePlannerQueries();
-      toast.success(`✅ Saved to ${data.target}!`, {
-        description: navPath ? "Tap 'View' on the card to go there." : undefined,
-        duration: 4000,
-      });
-    },
-    onError: (err, _vars, context: any) => {
-      const idx = context?.idx as number;
-      setStates(prev => ({ ...prev, [idx]: { saved: false, saving: false } }));
-      console.error("[Zion Save]", err);
-      toast.error(`Could not save: ${err.message}`, { duration: 6000 });
-    },
-  });
+  const saveMutation = trpc.zion.saveParsedItem.useMutation();
 
   const handleSaveOne = (action: PlannerAction, idx: number) => {
     if (states[idx]?.saved || states[idx]?.saving) return;
     setStates(prev => ({ ...prev, [idx]: { saved: false, saving: true } }));
-    saveMutation.mutate(buildSavePayload(action, now), { meta: { idx } } as any);
+    saveMutation.mutate(buildSavePayload(action, now), {
+      onSuccess: (data) => {
+        const navPath = (data as any).navPath;
+        setStates(prev => ({
+          ...prev,
+          [idx]: { saved: true, saving: false, navPath, target: data.target },
+        }));
+        invalidatePlannerQueries();
+        toast.success(`✅ Saved to ${data.target}!`, { duration: 3000 });
+      },
+      onError: (err) => {
+        setStates(prev => ({ ...prev, [idx]: { saved: false, saving: false } }));
+        console.error("[Zion Save]", err);
+        toast.error(`Could not save: ${err.message}`, { duration: 6000 });
+      },
+    });
   };
 
   const handleSaveAll = () => {
