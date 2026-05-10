@@ -2,7 +2,7 @@ import { Resend } from "resend";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const FROM_ADDRESS = process.env.EMAIL_FROM || "BDB Planner <noreply@bdbplanner.com>";
+const FROM_ADDRESS = process.env.EMAIL_FROM || "Be Do Become <hello@bedobecome.com>";
 const APP_URL = process.env.APP_URL || "https://bdbplanner.com";
 
 export async function sendWelcomeEmail(to: string, name: string) {
@@ -34,7 +34,7 @@ export async function sendWelcomeEmail(to: string, name: string) {
 
           <!-- Header -->
           <tr>
-            <td style="background:linear-gradient(135deg,#f59e0b,#f97316);padding:40px 40px 32px;text-align:center;">
+            <td style="background:linear-gradient(135deg,#10b981,#059669);padding:40px 40px 32px;text-align:center;">
               <p style="margin:0 0 8px;font-size:13px;color:rgba(255,255,255,0.8);letter-spacing:2px;text-transform:uppercase;font-weight:600;">Be · Do · Become</p>
               <h1 style="margin:0;font-size:32px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">BDB Digital Planner</h1>
             </td>
@@ -71,7 +71,7 @@ export async function sendWelcomeEmail(to: string, name: string) {
               <table cellpadding="0" cellspacing="0" width="100%">
                 <tr>
                   <td align="center">
-                    <a href="${APP_URL}" style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#f97316);color:#ffffff;font-size:16px;font-weight:700;text-decoration:none;padding:16px 40px;border-radius:12px;letter-spacing:0.3px;">
+                    <a href="${APP_URL}" style="display:inline-block;background:linear-gradient(135deg,#10b981,#059669);color:#ffffff;font-size:16px;font-weight:700;text-decoration:none;padding:16px 40px;border-radius:12px;letter-spacing:0.3px;">
                       Start Planning →
                     </a>
                   </td>
@@ -103,5 +103,65 @@ export async function sendWelcomeEmail(to: string, name: string) {
   } catch (err) {
     // Never crash registration because email failed
     console.error("[Email] Failed to send welcome email:", err);
+  }
+}
+
+export async function sendPasswordResetEmail(to: string, resetToken: string) {
+  if (!process.env.RESEND_API_KEY) {
+    console.warn("[Email] RESEND_API_KEY not set — skipping password reset email");
+    return;
+  }
+  const resetUrl = `${APP_URL}/reset-password?token=${resetToken}`;
+  try {
+    await resend.emails.send({
+      from: FROM_ADDRESS,
+      to,
+      subject: "Reset your BDB Planner password",
+      html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background-color:#faf8f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#faf8f5;padding:40px 20px;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+        <tr>
+          <td style="background:linear-gradient(135deg,#10b981,#059669);padding:36px 40px;text-align:center;">
+            <p style="margin:0 0 6px;font-size:12px;color:rgba(255,255,255,0.8);letter-spacing:2px;text-transform:uppercase;font-weight:600;">Be · Do · Become</p>
+            <h1 style="margin:0;font-size:26px;font-weight:900;color:#ffffff;">Password Reset</h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:40px;">
+            <h2 style="margin:0 0 12px;font-size:20px;font-weight:800;color:#1a1a1a;">Forgot your password?</h2>
+            <p style="margin:0 0 24px;font-size:15px;line-height:1.7;color:#4a4a4a;">
+              No worries — it happens to the best of us. Click the button below to set a new password. This link expires in <strong>1 hour</strong>.
+            </p>
+            <table cellpadding="0" cellspacing="0" width="100%">
+              <tr><td align="center">
+                <a href="${resetUrl}" style="display:inline-block;background:linear-gradient(135deg,#10b981,#059669);color:#ffffff;font-size:16px;font-weight:700;text-decoration:none;padding:16px 40px;border-radius:12px;">
+                  Reset My Password →
+                </a>
+              </td></tr>
+            </table>
+            <p style="margin:28px 0 0;font-size:13px;color:#8a7a6a;text-align:center;">
+              If you didn't request this, you can safely ignore this email.<br/>Your password won't change.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px 40px;border-top:1px solid #f0ebe4;text-align:center;">
+            <p style="margin:0;font-size:12px;color:#b0a090;">BDB Digital Planner by <strong>Leah Marville</strong> · Be Do Become Wellness</p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`,
+    });
+    console.log(`[Email] Password reset email sent to ${to}`);
+  } catch (err) {
+    console.error("[Email] Failed to send password reset email:", err);
   }
 }

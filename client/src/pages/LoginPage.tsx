@@ -7,15 +7,17 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Sparkles, Eye, EyeOff } from "lucide-react";
 
 type Gender = "female" | "male" | "other";
+type Mode = "login" | "register" | "forgot";
 
 export default function LoginPage() {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [gender, setGender] = useState<Gender>("other");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
   const [, navigate] = useLocation();
   const { refresh } = useAuth();
@@ -24,8 +26,22 @@ export default function LoginPage() {
     async (e: React.FormEvent) => {
       e.preventDefault();
       setError("");
+      setSuccess("");
       setLoading(true);
       try {
+        if (mode === "forgot") {
+          const res = await fetch("/api/auth/forgot-password", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email }),
+          });
+          if (res.ok) {
+            setSuccess("If an account with that email exists, we've sent a reset link. Check your inbox.");
+          } else {
+            setError("Something went wrong. Please try again.");
+          }
+          return;
+        }
         const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/register";
         const body: Record<string, string> = { email, password };
         if (mode === "register") {
@@ -54,9 +70,10 @@ export default function LoginPage() {
     [mode, email, password, name, gender, refresh, navigate]
   );
 
-  const switchMode = (newMode: "login" | "register") => {
+  const switchMode = (newMode: Mode) => {
     setMode(newMode);
     setError("");
+    setSuccess("");
     setEmail("");
     setPassword("");
     setName("");
@@ -118,16 +135,23 @@ export default function LoginPage() {
 
           <div className="mb-8">
             <h1 className="text-3xl font-black text-[#1a1a1a] mb-2">
-              {mode === "login" ? "Welcome back" : "Join the journey"}
+              {mode === "login" ? "Welcome back" : mode === "register" ? "Join the journey" : "Reset password"}
             </h1>
             <p className="text-[#8a7a6a]">
               {mode === "login"
                 ? "Sign in to continue your planning journey"
-                : "Create your account and start building your best year"}
+                : mode === "register"
+                ? "Create your account and start building your best year"
+                : "Enter your email and we'll send you a reset link"}
             </p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
+            {success && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
+                <p className="text-sm text-emerald-700">{success}</p>
+              </div>
+            )}
             {mode === "register" && (
               <div className="space-y-2">
                 <Label htmlFor="name" className="text-[#1a1a1a] font-semibold">Full Name</Label>
@@ -157,29 +181,38 @@ export default function LoginPage() {
               />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="password" className="text-[#1a1a1a] font-semibold">Password</Label>
-              <div className="relative">
-                <Input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  placeholder={mode === "register" ? "At least 8 characters" : "Your password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={mode === "register" ? 8 : undefined}
-                  autoComplete={mode === "login" ? "current-password" : "new-password"}
-                  className="h-12 border-[#e8e0d5] focus:border-emerald-400 focus:ring-emerald-200 bg-white pr-12"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8a7a6a] hover:text-[#1a1a1a] transition-colors"
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
+            {mode !== "forgot" && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="password" className="text-[#1a1a1a] font-semibold">Password</Label>
+                  {mode === "login" && (
+                    <button type="button" onClick={() => switchMode("forgot")} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">
+                      Forgot password?
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    placeholder={mode === "register" ? "At least 8 characters" : "Your password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required={mode !== "forgot"}
+                    minLength={mode === "register" ? 8 : undefined}
+                    autoComplete={mode === "login" ? "current-password" : "new-password"}
+                    className="h-12 border-[#e8e0d5] focus:border-emerald-400 focus:ring-emerald-200 bg-white pr-12"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8a7a6a] hover:text-[#1a1a1a] transition-colors"
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
             {mode === "register" && (
               <div className="space-y-2">
@@ -209,18 +242,20 @@ export default function LoginPage() {
               </div>
             )}
 
-            <Button
-              type="submit"
-              className="w-full h-12 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white font-bold text-base rounded-xl border-0 shadow-md hover:shadow-lg transition-all"
-              disabled={loading}
-            >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  {mode === "register" ? "Creating account..." : "Signing in..."}
-                </span>
-              ) : mode === "login" ? "Sign In →" : "Create Account →"}
-            </Button>
+            {!(mode === "forgot" && success) && (
+              <Button
+                type="submit"
+                className="w-full h-12 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white font-bold text-base rounded-xl border-0 shadow-md hover:shadow-lg transition-all"
+                disabled={loading}
+              >
+                {loading ? (
+                  <span className="flex items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    {mode === "register" ? "Creating account..." : mode === "forgot" ? "Sending link..." : "Signing in..."}
+                  </span>
+                ) : mode === "login" ? "Sign In →" : mode === "register" ? "Create Account →" : "Send Reset Link →"}
+              </Button>
+            )}
           </form>
 
           {/* Zion AI teaser */}
@@ -246,9 +281,8 @@ export default function LoginPage() {
               </>
             ) : (
               <>
-                Already have an account?{" "}
                 <button type="button" className="text-emerald-600 font-semibold hover:text-emerald-700" onClick={() => switchMode("login")}>
-                  Sign in
+                  ← Back to sign in
                 </button>
               </>
             )}

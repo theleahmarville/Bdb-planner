@@ -20,6 +20,7 @@ import {
   Sparkles,
   Moon,
   Bell,
+  Settings,
 } from "lucide-react";
 import { MONTHS } from "@/lib/planner";
 import { cn } from "@/lib/utils";
@@ -327,6 +328,11 @@ export default function PlannerLayout({
                 <p className="text-xs text-sidebar-foreground/50 truncate">{user?.email || ""}</p>
               </div>
             )}
+            <Link href="/settings">
+              <button className="p-2 min-w-[44px] min-h-[44px] rounded hover:bg-sidebar-accent transition-colors text-sidebar-foreground/70 hover:text-sidebar-foreground flex-shrink-0 flex items-center justify-center" title="Account settings">
+                <Settings size={15} />
+              </button>
+            </Link>
             <button onClick={() => logout()} className="p-2 min-w-[44px] min-h-[44px] rounded hover:bg-sidebar-accent transition-colors text-sidebar-foreground/70 hover:text-sidebar-foreground flex-shrink-0 flex items-center justify-center" title="Sign out">
               <LogOut size={15} />
             </button>
@@ -345,7 +351,7 @@ export default function PlannerLayout({
       {sidebarOpen && (
         <div className="px-4 py-2 border-t border-sidebar-border">
           <p className="text-[9px] text-sidebar-foreground/40 leading-tight text-center">
-            © 2026 Be Do Become Wellness<br />by Leah Marville · All rights reserved
+            © {new Date().getFullYear()} Be Do Become Wellness<br />by Leah Marville · All rights reserved
           </p>
         </div>
       )}

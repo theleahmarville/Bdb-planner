@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import VisionBoardTab from "@/components/VisionBoardTab";
 import SectionToolbar from "@/components/SectionToolbar";
 
-const YEAR = 2026;
+const YEAR = new Date().getFullYear();
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export default function AnnualPage() {
@@ -146,7 +146,7 @@ export default function AnnualPage() {
         <div className="tabs-scroll mb-4 md:mb-6">
         <TabsList className="flex flex-nowrap md:flex-wrap gap-1 h-auto bg-muted p-1 rounded-xl w-max md:w-full">
           {[
-            { value: "becoming", label: "Becoming 2026" },
+            { value: "becoming", label: `Becoming ${YEAR}` },
             { value: "goals", label: "Big Goals" },
             { value: "needs", label: "Needs & Budget" },
             { value: "whoami", label: "Who Am I?" },
@@ -162,12 +162,13 @@ export default function AnnualPage() {
         </TabsList>
         </div>
 
-        {/* ── Becoming 2026 ── */}
+        {/* ── Becoming ── */}
         <TabsContent value="becoming">
           <div className="mb-4">
-            <h2 className="text-2xl font-black mb-1">Becoming: 2026</h2>
+            <h2 className="text-2xl font-black mb-1">Becoming: {YEAR}</h2>
             <p className="text-sm text-muted-foreground">List what is important for you to achieve this year by the categories below.</p>
           </div>
+          <SectionToolbar sectionKey={`annual-${YEAR}-becoming`} section="annual" />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {LIFE_CATEGORIES.map(({ key, label }) => (
               <div key={key} className="planner-card">
@@ -175,7 +176,7 @@ export default function AnnualPage() {
                 <EditableField
                   value={localData[key] || ""}
                   onChange={(v) => update(key, v)}
-                  placeholder={`Your ${label.toLowerCase()} goals for 2026...`}
+                  placeholder={`Your ${label.toLowerCase()} goals for ${YEAR}...`}
                   multiline
                   rows={5}
                   autoResize
@@ -343,7 +344,7 @@ export default function AnnualPage() {
             <EditableField
               value={localData.visionBoardContent || ""}
               onChange={(v) => update("visionBoardContent", v)}
-              placeholder="Write your vision here... What does your ideal 2026 look like? What do you see, feel, and experience?"
+              placeholder={`Write your vision here... What does your ideal ${YEAR} look like? What do you see, feel, and experience?`}
               multiline
               rows={8}
             />
@@ -355,6 +356,7 @@ export default function AnnualPage() {
           <div className="mb-4">
             <h2 className="text-2xl font-black mb-1">How do I present myself?</h2>
           </div>
+          <SectionToolbar sectionKey={`annual-${YEAR}-presentation`} section="annual" />
           <div className="space-y-4">
             <div className="planner-card">
               <h3 className="font-bold mb-1">Personal Mission Statement</h3>
@@ -383,7 +385,7 @@ export default function AnnualPage() {
         <TabsContent value="contract">
           <div className="mb-4">
             <h2 className="text-2xl font-black mb-1">My Personal Contract</h2>
-            <p className="text-sm text-muted-foreground">Seal your commitment to yourself for 2026.</p>
+            <p className="text-sm text-muted-foreground">Seal your commitment to yourself for {YEAR}.</p>
           </div>
           <SectionToolbar sectionKey={`annual-${YEAR}-contract`} section="annual" />
           <div className="planner-card max-w-2xl mx-auto bg-foreground text-background p-8 rounded-2xl">
@@ -459,6 +461,7 @@ export default function AnnualPage() {
             <h2 className="text-2xl font-black mb-1">Transformation Timeline</h2>
             <p className="text-sm text-muted-foreground">Create a snapshot of your 12-month plan for success.</p>
           </div>
+          <SectionToolbar sectionKey={`annual-${YEAR}-timeline`} section="annual" />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {["Q1", "Q2", "Q3", "Q4"].map((quarter, qi) => (
               <div key={quarter}>

@@ -26,7 +26,7 @@ const DAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export default function MonthlyPage() {
   const params = useParams<{ year: string; month: string }>();
-  const year = parseInt(params.year || "2026");
+  const year = parseInt(params.year || String(new Date().getFullYear()));
   const month = parseInt(params.month || String(new Date().getMonth() + 1));
   const [, navigate] = useLocation();
 

@@ -7,7 +7,8 @@ import { getSessionCookieOptions } from "./cookies";
 import { authService } from "./sdk";
 import { ENV } from "./env";
 import { google } from "googleapis";
-import { sendWelcomeEmail } from "./email";
+import { sendWelcomeEmail, sendPasswordResetEmail } from "./email";
+import { SignJWT, jwtVerify } from "jose";
 
 export function registerAuthRoutes(app: Express) {
   // GET /api/auth/google/callback — Google OAuth callback
@@ -162,6 +163,75 @@ export function registerAuthRoutes(app: Express) {
     } catch (error) {
       console.error("[Auth] Registration failed", error);
       res.status(500).json({ error: "Registration failed" });
+    }
+  });
+
+  // POST /api/auth/forgot-password
+  app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
+    const { email } = req.body;
+    if (!email) { res.status(400).json({ error: "Email is required" }); return; }
+    try {
+      const user = await db.getUserByEmail(email.toLowerCase());
+      // Always return success so we don't leak which emails exist
+      if (!user) { res.json({ success: true }); return; }
+      const secret = new TextEncoder().encode(process.env.JWT_SECRET || "fallback-secret");
+      const token = await new SignJWT({ sub: user.email, type: "password_reset" })
+        .setProtectedHeader({ alg: "HS256" })
+        .setExpirationTime("1h")
+        .sign(secret);
+      sendPasswordResetEmail(user.email!, token).catch(() => {});
+      res.json({ success: true });
+    } catch (error) {
+      console.error("[Auth] Forgot password failed", error);
+      res.status(500).json({ error: "Something went wrong" });
+    }
+  });
+
+  // POST /api/auth/reset-password
+  app.post("/api/auth/reset-password", async (req: Request, res: Response) => {
+    const { token, password } = req.body;
+    if (!token || !password) { res.status(400).json({ error: "Token and new password are required" }); return; }
+    if (password.length < 8) { res.status(400).json({ error: "Password must be at least 8 characters" }); return; }
+    try {
+      const secret = new TextEncoder().encode(process.env.JWT_SECRET || "fallback-secret");
+      const { payload } = await jwtVerify(token, secret);
+      if (payload.type !== "password_reset" || !payload.sub) {
+        res.status(400).json({ error: "Invalid or expired reset link" }); return;
+      }
+      const user = await db.getUserByEmail(payload.sub as string);
+      if (!user) { res.status(404).json({ error: "Account not found" }); return; }
+      const passwordHash = await bcrypt.hash(password, 12);
+      await db.upsertUser({ openId: user.openId, passwordHash });
+      res.json({ success: true });
+    } catch {
+      res.status(400).json({ error: "Invalid or expired reset link. Please request a new one." });
+    }
+  });
+
+  // PATCH /api/auth/profile — update name or password
+  app.patch("/api/auth/profile", async (req: Request, res: Response) => {
+    try {
+      const user = await authService.authenticateRequest(req);
+      if (!user) { res.status(401).json({ error: "Not authenticated" }); return; }
+      const { name, currentPassword, newPassword } = req.body;
+      const dbUser = await db.getUserByOpenId(user.openId);
+      if (!dbUser) { res.status(404).json({ error: "User not found" }); return; }
+      const updates: Record<string, any> = { openId: user.openId };
+      if (name !== undefined) updates.name = name.trim() || null;
+      if (newPassword) {
+        if (!currentPassword) { res.status(400).json({ error: "Current password is required" }); return; }
+        if (!dbUser.passwordHash) { res.status(400).json({ error: "No password set on this account" }); return; }
+        const valid = await bcrypt.compare(currentPassword, dbUser.passwordHash);
+        if (!valid) { res.status(401).json({ error: "Current password is incorrect" }); return; }
+        if (newPassword.length < 8) { res.status(400).json({ error: "New password must be at least 8 characters" }); return; }
+        updates.passwordHash = await bcrypt.hash(newPassword, 12);
+      }
+      await db.upsertUser(updates as any);
+      const updated = await db.getUserByOpenId(user.openId);
+      res.json({ success: true, user: { id: updated?.id, name: updated?.name, email: updated?.email } });
+    } catch (error) {
+      console.error("[Auth] Profile update failed", error);
+      res.status(500).json({ error: "Failed to update profile" });
     }
   });
 

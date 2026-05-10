@@ -13,26 +13,25 @@ import IntegrationsPage from "./pages/IntegrationsPage";
 import NotesPage from "./pages/NotesPage";
 import YearCalendarPage from "./pages/YearCalendarPage";
 import ZionPage from "./pages/ZionPage";
+import SettingsPage from "./pages/SettingsPage";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
 import PlannerLayout from "./components/PlannerLayout";
 import { useState } from "react";
 import { getISOWeek, getISOWeekYear } from "date-fns";
 
 function PlannerRouter() {
   const [location] = useLocation();
-  const [year, setYear] = useState(2026);
+  const [year, setYear] = useState(new Date().getFullYear());
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [week, setWeek] = useState(getISOWeek(new Date()));
 
   const isHome = location === "/";
   const isLogin = location === "/login";
+  const isResetPassword = location.startsWith("/reset-password");
 
-  if (isLogin) {
-    return <LoginPage />;
-  }
-
-  if (isHome) {
-    return <Home />;
-  }
+  if (isLogin) return <LoginPage />;
+  if (isResetPassword) return <ResetPasswordPage />;
+  if (isHome) return <Home />;
 
   return (
     <PlannerLayout
@@ -51,6 +50,7 @@ function PlannerRouter() {
         <Route path="/integrations" component={IntegrationsPage} />
         <Route path="/notes" component={NotesPage} />
         <Route path="/zion" component={ZionPage} />
+        <Route path="/settings" component={SettingsPage} />
         <Route path="/404" component={NotFound} />
         <Route component={NotFound} />
       </Switch>
