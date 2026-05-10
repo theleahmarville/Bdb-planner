@@ -241,19 +241,24 @@ export default function VisionBoardTab({
                 </div>
 
                 {/* Pinterest widget embed */}
-                <div className="pinterest-widget-wrap overflow-hidden min-h-[280px] bg-[#fafafa] flex items-center justify-center">
-                  <a
-                    data-pin-do="embedBoard"
-                    data-pin-scale-height="320"
-                    data-pin-scale-width="340"
-                    data-pin-board-width="340"
-                    href={localPinterestUrl}
-                    className="block"
-                  />
-                  {/* Fallback message while widget loads */}
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none" style={{ zIndex: -1 }}>
+                <div className="relative overflow-hidden min-h-[280px] bg-[#fafafa]">
+                  {/* Fallback shown behind widget */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center px-4">
                     <Pin className="w-8 h-8 text-red-200" />
-                    <p className="text-xs text-muted-foreground">Loading board preview…</p>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      Loading board preview…<br />
+                      <a href={localPinterestUrl} target="_blank" rel="noopener noreferrer" className="text-red-400 underline">Open in Pinterest</a>
+                    </p>
+                  </div>
+                  {/* Pinterest embed widget — pinit.js replaces this <a> with an iframe */}
+                  <div className="relative z-10">
+                    <a
+                      data-pin-do="embedBoard"
+                      data-pin-scale-height="320"
+                      data-pin-scale-width="340"
+                      data-pin-board-width="340"
+                      href={localPinterestUrl}
+                    />
                   </div>
                 </div>
               </div>

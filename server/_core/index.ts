@@ -17,6 +17,7 @@ import { createContext } from "./context";
 // bundles vite / vite-plugins into the production output
 
 import { getDb, ensureSchema } from "../db";
+import { LOCAL_UPLOADS_DIR } from "../storage";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -162,6 +163,9 @@ async function startServer() {
       });
     }
   });
+
+  // Serve local uploads (fallback when S3 is not configured)
+  app.use("/uploads", express.static(LOCAL_UPLOADS_DIR));
 
   // Email/password auth routes
   registerAuthRoutes(app);

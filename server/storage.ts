@@ -1,101 +1,132 @@
-// Storage helpers using storage proxy (Authorization: Bearer <token>)
+/**
+ * Storage module — supports two backends:
+ *
+ *  1. S3 / Cloudflare R2 / Backblaze B2 (any S3-compatible service)
+ *     Set: S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+ *     Optional: S3_REGION (default "auto"), S3_ENDPOINT (for R2/B2),
+ *               S3_PUBLIC_URL (CDN / custom domain for serving files)
+ *
+ *  2. Local-disk fallback (development / no S3 configured)
+ *     Files saved to ./uploads/ and served at /uploads/<key>
+ */
 
-import { ENV } from './_core/env';
+import path from "path";
+import fs from "fs";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
-type StorageConfig = { baseUrl: string; apiKey: string };
+// ── S3 client (lazy-initialised once) ────────────────────────────────────────
+let _s3: S3Client | null = null;
 
-function getStorageConfig(): StorageConfig {
-  const baseUrl = ENV.openaiApiUrl;
-  const apiKey = ENV.openaiApiKey;
+function getS3(): S3Client | null {
+  if (_s3) return _s3;
 
-  if (!baseUrl || !apiKey) {
-    throw new Error(
-      "Storage proxy credentials missing: set OPENAI_API_URL and OPENAI_API_KEY"
-    );
-  }
+  const bucket = process.env.S3_BUCKET;
+  const accessKeyId = process.env.S3_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY;
 
-  return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey };
-}
+  if (!bucket || !accessKeyId || !secretAccessKey) return null;
 
-function buildUploadUrl(baseUrl: string, relKey: string): URL {
-  const url = new URL("v1/storage/upload", ensureTrailingSlash(baseUrl));
-  url.searchParams.set("path", normalizeKey(relKey));
-  return url;
-}
+  const region = process.env.S3_REGION || "auto";
+  const endpoint = process.env.S3_ENDPOINT; // e.g. https://ACCOUNT.r2.cloudflarestorage.com
 
-async function buildDownloadUrl(
-  baseUrl: string,
-  relKey: string,
-  apiKey: string
-): Promise<string> {
-  const downloadApiUrl = new URL(
-    "v1/storage/downloadUrl",
-    ensureTrailingSlash(baseUrl)
-  );
-  downloadApiUrl.searchParams.set("path", normalizeKey(relKey));
-  const response = await fetch(downloadApiUrl, {
-    method: "GET",
-    headers: buildAuthHeaders(apiKey),
+  _s3 = new S3Client({
+    region,
+    credentials: { accessKeyId, secretAccessKey },
+    ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
   });
-  return (await response.json()).url;
+
+  return _s3;
 }
 
-function ensureTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value : `${value}/`;
+function s3Bucket(): string {
+  return process.env.S3_BUCKET!;
 }
 
-function normalizeKey(relKey: string): string {
-  return relKey.replace(/^\/+/, "");
+/** Build the public URL for a stored file */
+function s3PublicUrl(key: string): string {
+  const custom = process.env.S3_PUBLIC_URL?.replace(/\/+$/, "");
+  if (custom) return `${custom}/${key}`;
+
+  const endpoint = process.env.S3_ENDPOINT?.replace(/\/+$/, "");
+  const bucket = s3Bucket();
+  if (endpoint) return `${endpoint}/${bucket}/${key}`;
+
+  const region = process.env.S3_REGION || "us-east-1";
+  return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
 }
 
-function toFormData(
+// ── Local-disk fallback ───────────────────────────────────────────────────────
+/** Absolute path to local uploads directory */
+export const LOCAL_UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
+
+function ensureUploadsDir() {
+  if (!fs.existsSync(LOCAL_UPLOADS_DIR)) {
+    fs.mkdirSync(LOCAL_UPLOADS_DIR, { recursive: true });
+  }
+}
+
+async function localPut(
+  relKey: string,
   data: Buffer | Uint8Array | string,
-  contentType: string,
-  fileName: string
-): FormData {
-  const blob =
-    typeof data === "string"
-      ? new Blob([data], { type: contentType })
-      : new Blob([data as any], { type: contentType });
-  const form = new FormData();
-  form.append("file", blob, fileName || "file");
-  return form;
+): Promise<{ key: string; url: string }> {
+  ensureUploadsDir();
+  const filePath = path.join(LOCAL_UPLOADS_DIR, relKey.replace(/^\/+/, ""));
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  fs.writeFileSync(filePath, data as any);
+  // URL served by express.static at /uploads/…
+  const url = `/uploads/${relKey.replace(/^\/+/, "")}`;
+  return { key: relKey, url };
 }
 
-function buildAuthHeaders(apiKey: string): HeadersInit {
-  return { Authorization: `Bearer ${apiKey}` };
-}
+// ── Public API ────────────────────────────────────────────────────────────────
 
+/**
+ * Upload a file. Tries S3 first; falls back to local disk.
+ * Returns { key, url } where url is the public URL of the stored file.
+ */
 export async function storagePut(
   relKey: string,
   data: Buffer | Uint8Array | string,
-  contentType = "application/octet-stream"
+  contentType = "application/octet-stream",
 ): Promise<{ key: string; url: string }> {
-  const { baseUrl, apiKey } = getStorageConfig();
-  const key = normalizeKey(relKey);
-  const uploadUrl = buildUploadUrl(baseUrl, key);
-  const formData = toFormData(data, contentType, key.split("/").pop() ?? key);
-  const response = await fetch(uploadUrl, {
-    method: "POST",
-    headers: buildAuthHeaders(apiKey),
-    body: formData,
-  });
+  const s3 = getS3();
+  const key = relKey.replace(/^\/+/, "");
 
-  if (!response.ok) {
-    const message = await response.text().catch(() => response.statusText);
-    throw new Error(
-      `Storage upload failed (${response.status} ${response.statusText}): ${message}`
+  if (s3) {
+    // ── S3 path ──────────────────────────────────────────────────────────────
+    const body = typeof data === "string" ? Buffer.from(data) : data;
+
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: s3Bucket(),
+        Key: key,
+        Body: body as Buffer,
+        ContentType: contentType,
+        // Make objects publicly readable (standard for vision boards / avatars)
+        ACL: "public-read",
+      }),
+    );
+
+    return { key, url: s3PublicUrl(key) };
+  }
+
+  // ── Local-disk fallback ───────────────────────────────────────────────────
+  if (process.env.NODE_ENV === "production") {
+    console.warn(
+      "[storage] ⚠️  S3 not configured (set S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY). " +
+      "Falling back to local disk — files will be lost on redeploy.",
     );
   }
-  const url = (await response.json()).url;
-  return { key, url };
+
+  return localPut(key, data);
 }
 
-export async function storageGet(relKey: string): Promise<{ key: string; url: string; }> {
-  const { baseUrl, apiKey } = getStorageConfig();
-  const key = normalizeKey(relKey);
-  return {
-    key,
-    url: await buildDownloadUrl(baseUrl, key, apiKey),
-  };
+/**
+ * Returns whether S3 is configured and ready.
+ * Used by the health check endpoint.
+ */
+export function storageIsS3(): boolean {
+  return !!getS3();
 }

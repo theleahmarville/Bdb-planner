@@ -3,6 +3,6 @@ export const ENV = {
   databaseUrl: process.env.DATABASE_URL ?? "",
   adminEmail: process.env.ADMIN_EMAIL ?? "",
   isProduction: process.env.NODE_ENV === "production",
-  openaiApiUrl: process.env.OPENAI_API_URL ?? "",
+  /** Anthropic API key for Zion AI */
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
 };
