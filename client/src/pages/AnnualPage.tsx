@@ -336,7 +336,7 @@ export default function AnnualPage() {
           <SectionToolbar sectionKey={`annual-${YEAR}-vision`} section="annual" />
           <VisionBoardTab
             year={YEAR}
-            pinterestUrl=""
+            pinterestUrl={localData.visionBoardPinterest || ""}
             onPinterestUrlChange={(url) => update("visionBoardPinterest", url)}
           />
           <div className="mt-4 planner-card">
