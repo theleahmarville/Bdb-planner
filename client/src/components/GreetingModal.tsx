@@ -17,7 +17,11 @@ const TIME_EMOJIS: Record<string, string> = {
   night: "🌙",
 };
 
-export default function GreetingModal() {
+interface GreetingModalProps {
+  onDismissed?: () => void;
+}
+
+export default function GreetingModal({ onDismissed }: GreetingModalProps = {}) {
   const { isAuthenticated, user } = useAuth();
   const [visible, setVisible] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -43,6 +47,7 @@ export default function GreetingModal() {
     setVisible(false);
     setDismissed(true);
     sessionStorage.setItem(sessionKey, "1");
+    onDismissed?.();
   };
 
   if (!visible || !data || isLoading) return null;

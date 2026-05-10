@@ -76,19 +76,31 @@ export default function PlannerLayout({
     r => !r.sent && r.date >= now.toISOString().slice(0, 10)
   ).length;
 
-  // Auto-show daily devotion once per day (localStorage gate)
+  // devotionPending tracks whether today's devotion is waiting to be shown
+  // It opens after the greeting modal is dismissed (or immediately if greeting already shown)
+  const devotionKey = `devotion-shown-${new Date().toISOString().slice(0, 10)}`;
+  const greetingAlreadyShown = (userId: number | undefined) =>
+    !!sessionStorage.getItem(`greeting-shown-${userId}-${new Date().toISOString().slice(0, 10)}`);
+
+  const openDevotionIfDue = () => {
+    if (!localStorage.getItem(devotionKey)) {
+      setDevotionOpen(true);
+      localStorage.setItem(devotionKey, '1');
+    }
+  };
+
+  // If greeting was already shown this session, open devotion after a short delay
   useEffect(() => {
     if (!isAuthenticated) return;
-    const todayKey = `devotion-shown-${new Date().toISOString().slice(0, 10)}`;
-    if (!localStorage.getItem(todayKey)) {
-      // Small delay so the page loads first
-      const t = setTimeout(() => {
-        setDevotionOpen(true);
-        localStorage.setItem(todayKey, '1');
-      }, 1200);
+    if (localStorage.getItem(devotionKey)) return; // devotion already shown today
+    if (greetingAlreadyShown(user?.id)) {
+      // Greeting already dismissed earlier — open devotion directly
+      const t = setTimeout(() => openDevotionIfDue(), 800);
       return () => clearTimeout(t);
     }
-  }, [isAuthenticated]);
+    // Otherwise, devotion will open via onDismissed callback from GreetingModal
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, user?.id]);
 
   // Check if tonight's reflection is due
   const { data: nightlyStatus } = trpc.zion.checkNightlyPrompt.useQuery(undefined, {
@@ -447,8 +459,8 @@ export default function PlannerLayout({
 
       {/* Persistent Integration Bar — visible on all pages */}
       <IntegrationBar />
-      {/* Daily personalised greeting modal */}
-      <GreetingModal />
+      {/* Daily personalised greeting modal — opens first; devotion opens after */}
+      <GreetingModal onDismissed={openDevotionIfDue} />
       {/* AI Digest Panel */}
       <AIDigestPanel isOpen={digestOpen} onClose={() => setDigestOpen(false)} />
       {/* Nightly Reflection Modal */}
