@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import VisionBoardTab from "@/components/VisionBoardTab";
-import SectionAttachments from "@/components/SectionAttachments";
+import SectionToolbar from "@/components/SectionToolbar";
 
 const YEAR = 2026;
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -191,6 +191,7 @@ export default function AnnualPage() {
             <h2 className="text-2xl font-black mb-1">2026 in Detail</h2>
             <p className="text-sm text-muted-foreground">Define your 6 big goals and the steps to achieve them.</p>
           </div>
+          <SectionToolbar sectionKey={`annual-${YEAR}-biggoals`} section="annual" />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {goals.map((goal, idx) => (
               <div key={idx} className="planner-card">
@@ -225,9 +226,6 @@ export default function AnnualPage() {
               </div>
             ))}
           </div>
-          <div className="mt-4">
-            <SectionAttachments sectionKey={`annual-${YEAR}-biggoals`} section="annual" label="Attach reference PDFs or files" />
-          </div>
         </TabsContent>
         {/* ── Needs & Budget ── */}
         <TabsContent value="needs">
@@ -236,6 +234,7 @@ export default function AnnualPage() {
             <div>
               <h2 className="text-2xl font-black mb-1">What do I need?</h2>
               <p className="text-sm text-muted-foreground mb-4">Know your basic needs to set the foundation upon which you can make sound decisions.</p>
+              <SectionToolbar sectionKey={`annual-${YEAR}-needs`} section="annual" />
               <h3 className="font-bold mb-3">Basic Needs</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {["Relationships", "Career", "Wellness", "Finance"].map((cat) => (
@@ -297,6 +296,7 @@ export default function AnnualPage() {
             <h2 className="text-2xl font-black mb-1">Who am I?</h2>
             <p className="text-sm text-muted-foreground">Diagram your life — find your purpose by assessing where it all intersects.</p>
           </div>
+          <SectionToolbar sectionKey={`annual-${YEAR}-whoami`} section="annual" />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="planner-card">
               <div className="planner-pill mb-3">Knowledge / Skills</div>
@@ -332,6 +332,7 @@ export default function AnnualPage() {
             <h2 className="text-2xl font-black mb-1">2026 Vision Board</h2>
             <p className="text-sm text-muted-foreground">Dream without limitations. Write your desired goals, the life you wish to create, and words of affirmation.</p>
           </div>
+          <SectionToolbar sectionKey={`annual-${YEAR}-vision`} section="annual" />
           <VisionBoardTab
             year={YEAR}
             pinterestUrl=""
@@ -346,7 +347,6 @@ export default function AnnualPage() {
               multiline
               rows={8}
             />
-            <SectionAttachments sectionKey={`annual-${YEAR}-vision`} section="annual" label="Attach PDFs or files" />
           </div>
         </TabsContent>
 
@@ -385,6 +385,7 @@ export default function AnnualPage() {
             <h2 className="text-2xl font-black mb-1">My Personal Contract</h2>
             <p className="text-sm text-muted-foreground">Seal your commitment to yourself for 2026.</p>
           </div>
+          <SectionToolbar sectionKey={`annual-${YEAR}-contract`} section="annual" />
           <div className="planner-card max-w-2xl mx-auto bg-foreground text-background p-8 rounded-2xl">
             <div className="text-center mb-6">
               <div className="w-16 h-16 rounded-full border-4 border-background/30 flex items-center justify-center mx-auto mb-4">
