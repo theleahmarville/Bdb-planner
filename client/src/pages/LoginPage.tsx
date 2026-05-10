@@ -60,7 +60,8 @@ export default function LoginPage() {
           return;
         }
         await refresh();
-        navigate("/");
+        // New registrations go through onboarding; returning users go home
+        navigate(mode === "register" ? "/onboarding" : "/");
       } catch {
         setError("Network error. Please try again.");
       } finally {
@@ -198,7 +199,7 @@ export default function LoginPage() {
                     placeholder={mode === "register" ? "At least 8 characters" : "Your password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    required={mode !== "forgot"}
+                    required
                     minLength={mode === "register" ? 8 : undefined}
                     autoComplete={mode === "login" ? "current-password" : "new-password"}
                     className="h-12 border-[#e8e0d5] focus:border-emerald-400 focus:ring-emerald-200 bg-white pr-12"

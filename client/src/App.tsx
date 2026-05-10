@@ -15,6 +15,7 @@ import YearCalendarPage from "./pages/YearCalendarPage";
 import ZionPage from "./pages/ZionPage";
 import SettingsPage from "./pages/SettingsPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
+import OnboardingPage from "./pages/OnboardingPage";
 import PlannerLayout from "./components/PlannerLayout";
 import { useState } from "react";
 import { getISOWeek, getISOWeekYear } from "date-fns";
@@ -28,9 +29,11 @@ function PlannerRouter() {
   const isHome = location === "/";
   const isLogin = location === "/login";
   const isResetPassword = location.startsWith("/reset-password");
+  const isOnboarding = location === "/onboarding";
 
   if (isLogin) return <LoginPage />;
   if (isResetPassword) return <ResetPasswordPage />;
+  if (isOnboarding) return <OnboardingPage />;
   if (isHome) return <Home />;
 
   return (

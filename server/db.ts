@@ -111,6 +111,26 @@ export async function ensureSchema(): Promise<void> {
         column: "dailyWins",
         ddl: "ALTER TABLE `daily_entries` ADD COLUMN `dailyWins` JSON",
       },
+      {
+        table: "users",
+        column: "avatarUrl",
+        ddl: "ALTER TABLE `users` ADD COLUMN `avatarUrl` TEXT",
+      },
+      {
+        table: "users",
+        column: "bio",
+        ddl: "ALTER TABLE `users` ADD COLUMN `bio` VARCHAR(280)",
+      },
+      {
+        table: "users",
+        column: "timezone",
+        ddl: "ALTER TABLE `users` ADD COLUMN `timezone` VARCHAR(64) DEFAULT 'UTC'",
+      },
+      {
+        table: "users",
+        column: "onboardingCompleted",
+        ddl: "ALTER TABLE `users` ADD COLUMN `onboardingCompleted` BOOLEAN NOT NULL DEFAULT FALSE",
+      },
     ];
 
     for (const { table, column, ddl } of checks) {
@@ -159,9 +179,12 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     }
-    if ((user as any).gender !== undefined) {
-      (values as any).gender = (user as any).gender;
-      updateSet.gender = (user as any).gender;
+    const extraFields = ["gender", "avatarUrl", "bio", "timezone", "onboardingCompleted"] as const;
+    for (const field of extraFields) {
+      if ((user as any)[field] !== undefined) {
+        (values as any)[field] = (user as any)[field];
+        updateSet[field] = (user as any)[field];
+      }
     }
     if (!values.lastSignedIn) values.lastSignedIn = new Date();
     if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();

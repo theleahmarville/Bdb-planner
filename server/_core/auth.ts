@@ -213,11 +213,15 @@ export function registerAuthRoutes(app: Express) {
     try {
       const user = await authService.authenticateRequest(req);
       if (!user) { res.status(401).json({ error: "Not authenticated" }); return; }
-      const { name, currentPassword, newPassword } = req.body;
+      const { name, currentPassword, newPassword, avatarUrl, bio, timezone, onboardingCompleted } = req.body;
       const dbUser = await db.getUserByOpenId(user.openId);
       if (!dbUser) { res.status(404).json({ error: "User not found" }); return; }
       const updates: Record<string, any> = { openId: user.openId };
       if (name !== undefined) updates.name = name.trim() || null;
+      if (avatarUrl !== undefined) updates.avatarUrl = avatarUrl;
+      if (bio !== undefined) updates.bio = bio.trim().slice(0, 280) || null;
+      if (timezone !== undefined) updates.timezone = timezone;
+      if (onboardingCompleted !== undefined) updates.onboardingCompleted = onboardingCompleted;
       if (newPassword) {
         if (!currentPassword) { res.status(400).json({ error: "Current password is required" }); return; }
         if (!dbUser.passwordHash) { res.status(400).json({ error: "No password set on this account" }); return; }
@@ -228,7 +232,7 @@ export function registerAuthRoutes(app: Express) {
       }
       await db.upsertUser(updates as any);
       const updated = await db.getUserByOpenId(user.openId);
-      res.json({ success: true, user: { id: updated?.id, name: updated?.name, email: updated?.email } });
+      res.json({ success: true, user: { id: updated?.id, name: updated?.name, email: updated?.email, avatarUrl: (updated as any)?.avatarUrl, bio: (updated as any)?.bio, timezone: (updated as any)?.timezone, onboardingCompleted: (updated as any)?.onboardingCompleted } });
     } catch (error) {
       console.error("[Auth] Profile update failed", error);
       res.status(500).json({ error: "Failed to update profile" });

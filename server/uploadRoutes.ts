@@ -101,6 +101,26 @@ router.post("/attachment", upload.single("file"), async (req, res) => {
   }
 });
 
+// POST /api/upload/avatar — user profile picture
+router.post("/avatar", upload.single("file"), async (req, res) => {
+  try {
+    let user;
+    try { user = await authService.authenticateRequest(req as any); }
+    catch { res.status(401).json({ error: "Unauthorized" }); return; }
+    if (!req.file) { res.status(400).json({ error: "No file provided" }); return; }
+    if (!req.file.mimetype.startsWith("image/")) {
+      res.status(400).json({ error: "Only image files are allowed for avatars" }); return;
+    }
+    const ext = req.file.originalname.split(".").pop() ?? "jpg";
+    const fileKey = `users/${user.id}/avatar/${nanoid()}.${ext}`;
+    const { url } = await storagePut(fileKey, req.file.buffer, req.file.mimetype);
+    res.json({ url, fileKey });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Upload failed";
+    res.status(500).json({ error: message });
+  }
+});
+
 // POST /api/upload/note-attachment — photos and PDFs attached to notes
 router.post("/note-attachment", upload.single("file"), async (req, res) => {
   try {

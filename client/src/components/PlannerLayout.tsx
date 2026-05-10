@@ -326,6 +326,18 @@ export default function PlannerLayout({
       <div className="px-2 py-3 border-t border-sidebar-border">
         {isAuthenticated ? (
           <div className={cn("flex items-center gap-2", !sidebarOpen && "justify-center")}>
+            {/* Avatar / initials */}
+            <Link href="/settings">
+              <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 cursor-pointer ring-2 ring-transparent hover:ring-emerald-400 transition-all bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center" title="Account settings">
+                {(user as any)?.avatarUrl ? (
+                  <img src={(user as any).avatarUrl} alt={user?.name || "Avatar"} className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-white text-xs font-bold">
+                    {(user?.name || "?").charAt(0).toUpperCase()}
+                  </span>
+                )}
+              </div>
+            </Link>
             {sidebarOpen && (
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium text-sidebar-foreground truncate">{user?.name || "Planner"}</p>

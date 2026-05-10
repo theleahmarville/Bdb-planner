@@ -1,13 +1,87 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Eye, EyeOff, User, Lock, LogOut } from "lucide-react";
+import {
+  Eye, EyeOff, User, Lock, LogOut, Camera, Globe, Clock, Loader2, X,
+} from "lucide-react";
+
+const TIMEZONES = [
+  "UTC", "America/New_York", "America/Chicago", "America/Denver",
+  "America/Los_Angeles", "America/Toronto", "America/Vancouver",
+  "America/Barbados", "America/Trinidad", "America/Jamaica",
+  "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Rome",
+  "Africa/Lagos", "Africa/Johannesburg", "Africa/Nairobi", "Africa/Accra",
+  "Asia/Dubai", "Asia/Karachi", "Asia/Kolkata", "Asia/Singapore",
+  "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland",
+];
 
 export default function SettingsPage() {
   const { user, refresh, logout } = useAuth();
+  const anyUser = user as any;
+
+  // ── Avatar ─────────────────────────────────────────────────────────────────
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(anyUser?.avatarUrl || null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(anyUser?.avatarUrl || null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { toast.error("Please select an image file"); return; }
+    if (file.size > 10 * 1024 * 1024) { toast.error("Image must be under 10MB"); return; }
+
+    const reader = new FileReader();
+    reader.onload = (ev) => setAvatarPreview(ev.target?.result as string);
+    reader.readAsDataURL(file);
+
+    setUploadingAvatar(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/upload/avatar", { method: "POST", body: formData, credentials: "include" });
+      if (!res.ok) throw new Error("Upload failed");
+      const data = await res.json();
+      setAvatarUrl(data.url);
+
+      // Save immediately to profile
+      await fetch("/api/auth/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ avatarUrl: data.url }),
+      });
+      await refresh();
+      toast.success("Profile photo updated!");
+    } catch {
+      toast.error("Upload failed — please try again");
+      setAvatarPreview(anyUser?.avatarUrl || null);
+    } finally {
+      setUploadingAvatar(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const removeAvatar = async () => {
+    setAvatarPreview(null);
+    setAvatarUrl(null);
+    try {
+      await fetch("/api/auth/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ avatarUrl: null }),
+      });
+      await refresh();
+      toast.success("Profile photo removed");
+    } catch {
+      toast.error("Could not remove photo — please try again");
+    }
+  };
 
   // ── Name form ──────────────────────────────────────────────────────────────
   const [name, setName] = useState(user?.name || "");
@@ -31,6 +105,33 @@ export default function SettingsPage() {
       toast.error("Network error. Please try again.");
     } finally {
       setSavingName(false);
+    }
+  };
+
+  // ── Bio & Timezone ─────────────────────────────────────────────────────────
+  const [bio, setBio] = useState(anyUser?.bio || "");
+  const [timezone, setTimezone] = useState(
+    anyUser?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+  );
+  const [savingBio, setSavingBio] = useState(false);
+
+  const handleSaveBio = async () => {
+    setSavingBio(true);
+    try {
+      const res = await fetch("/api/auth/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ bio: bio.trim(), timezone }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error || "Failed to save"); return; }
+      await refresh();
+      toast.success("Profile updated!");
+    } catch {
+      toast.error("Network error. Please try again.");
+    } finally {
+      setSavingBio(false);
     }
   };
 
@@ -67,6 +168,8 @@ export default function SettingsPage() {
     }
   };
 
+  const initials = (user?.name || "?").charAt(0).toUpperCase();
+
   return (
     <div className="p-4 md:p-8 max-w-2xl mx-auto">
       <div className="mb-8">
@@ -86,7 +189,49 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        {/* Avatar */}
+        <div className="flex flex-col items-center mb-6">
+          <div className="relative group">
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="w-24 h-24 rounded-full border-4 border-emerald-200 overflow-hidden cursor-pointer hover:border-emerald-400 transition-all bg-gradient-to-br from-emerald-100 to-green-100 flex items-center justify-center"
+            >
+              {avatarPreview ? (
+                <img src={avatarPreview} alt="Avatar" className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-2xl font-black text-emerald-600">{initials}</span>
+              )}
+              {uploadingAvatar && (
+                <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center">
+                  <Loader2 className="w-5 h-5 text-white animate-spin" />
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-md hover:bg-emerald-700 transition-colors"
+              type="button"
+            >
+              <Camera className="w-3.5 h-3.5" />
+            </button>
+            {avatarPreview && (
+              <button
+                onClick={removeAvatar}
+                className="absolute top-0 right-0 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition-colors"
+                type="button"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            {avatarPreview ? "Looking great! 👍" : "Click to add a profile photo"}
+          </p>
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
+        </div>
+
         <div className="space-y-4">
+          {/* Display Name */}
           <div className="space-y-2">
             <Label className="font-semibold">Display Name</Label>
             <div className="flex gap-2">
@@ -108,6 +253,7 @@ export default function SettingsPage() {
             </div>
           </div>
 
+          {/* Email (read-only) */}
           <div className="space-y-2">
             <Label className="font-semibold">Email Address</Label>
             <Input
@@ -117,6 +263,64 @@ export default function SettingsPage() {
             />
             <p className="text-xs text-muted-foreground">Email cannot be changed at this time.</p>
           </div>
+        </div>
+      </div>
+
+      {/* ── Bio & Timezone card ───────────────────────────────────────────────── */}
+      <div className="planner-card mb-6">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center shrink-0">
+            <Globe size={16} className="text-white" />
+          </div>
+          <div>
+            <h2 className="font-bold text-base">About You</h2>
+            <p className="text-xs text-muted-foreground">Bio and timezone preferences</p>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {/* Bio */}
+          <div className="space-y-2">
+            <Label className="font-semibold flex items-center gap-1.5">
+              <User className="w-3.5 h-3.5 text-emerald-600" /> Short Bio
+            </Label>
+            <Textarea
+              value={bio}
+              onChange={(e) => setBio(e.target.value.slice(0, 280))}
+              placeholder="What do you do? What drives you? What are you building? (optional)"
+              className="resize-none border-[#e8e0d5] focus:border-emerald-400 bg-white"
+              rows={3}
+            />
+            <p className="text-xs text-muted-foreground text-right">{bio.length}/280</p>
+          </div>
+
+          {/* Timezone */}
+          <div className="space-y-2">
+            <Label className="font-semibold flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-emerald-600" /> Your Timezone
+            </Label>
+            <div className="relative">
+              <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+              <select
+                value={timezone}
+                onChange={(e) => setTimezone(e.target.value)}
+                className="w-full h-10 pl-9 pr-4 rounded-xl border border-[#e8e0d5] bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 appearance-none"
+              >
+                {TIMEZONES.map((tz) => (
+                  <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>
+                ))}
+              </select>
+            </div>
+            <p className="text-xs text-muted-foreground">Used for reminders and daily greetings at the right time.</p>
+          </div>
+
+          <Button
+            onClick={handleSaveBio}
+            disabled={savingBio}
+            className="w-full h-10 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+          >
+            {savingBio ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Saving…</> : "Save Changes"}
+          </Button>
         </div>
       </div>
 
