@@ -100,6 +100,10 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
+  // Trust Railway / Render / Heroku reverse proxy so rate-limiters and
+  // IP detection work correctly behind the load balancer
+  app.set("trust proxy", 1);
+
   // Hide Express fingerprint
   app.disable("x-powered-by");
 
