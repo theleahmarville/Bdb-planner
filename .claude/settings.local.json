@@ -72,7 +72,12 @@
       "Bash(xargs cat *)",
       "Bash(xargs sed *)",
       "Bash(cat drizzle.config.ts)",
-      "Bash(cat drizzle.config.js)"
+      "Bash(cat drizzle.config.js)",
+      "Bash(npm run *)",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "WebSearch",
+      "WebFetch(domain:railway.com)",
+      "WebFetch(domain:base44.com)"
     ]
   }
 }

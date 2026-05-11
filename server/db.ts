@@ -133,6 +133,30 @@ export async function ensureSchema(): Promise<void> {
       },
     ];
 
+    // Create community tables if they don't exist
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`daily_check_ins\` (
+        \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\` INT NOT NULL,
+        \`date\` VARCHAR(10) NOT NULL,
+        \`rating\` INT NOT NULL,
+        \`note\` VARCHAR(500),
+        \`createdAt\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        \`updatedAt\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP NOT NULL,
+        UNIQUE KEY \`uq_user_date\` (\`userId\`, \`date\`),
+        INDEX \`idx_date\` (\`date\`)
+      )
+    `);
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`community_messages\` (
+        \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\` INT NOT NULL,
+        \`content\` VARCHAR(1000) NOT NULL,
+        \`createdAt\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        INDEX \`idx_createdAt\` (\`createdAt\`)
+      )
+    `);
+
     for (const { table, column, ddl } of checks) {
       const [rows] = await conn.query(
         `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
@@ -1189,4 +1213,177 @@ function getISOWeekOfDate(dateStr: string): number {
   startOfWeek1.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7));
   const diff = d.getTime() - startOfWeek1.getTime();
   return Math.ceil((diff / 86400000 + 1) / 7);
+}
+
+// ─── Community Functions ──────────────────────────────────────────────────────
+
+export async function upsertDailyCheckIn(
+  userId: number,
+  date: string,
+  rating: number,
+  note?: string
+): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `INSERT INTO \`daily_check_ins\` (userId, date, rating, note)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE rating = VALUES(rating), note = VALUES(note), updatedAt = CURRENT_TIMESTAMP`,
+      [userId, date, rating, note ?? null]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getMyCheckIn(userId: number, date: string): Promise<{ rating: number; note: string | null } | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT rating, note FROM \`daily_check_ins\` WHERE userId = ? AND date = ? LIMIT 1`,
+      [userId, date]
+    );
+    const list = rows as any[];
+    return list[0] ?? null;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getUserCheckInStreak(userId: number, today: string): Promise<number> {
+  const pool = getPool();
+  if (!pool) return 0;
+  const conn = await pool.getConnection();
+  try {
+    // Fetch all check-in dates for this user, newest first
+    const [rows] = await conn.query(
+      `SELECT date FROM \`daily_check_ins\` WHERE userId = ? ORDER BY date DESC`,
+      [userId]
+    );
+    const dates = (rows as any[]).map((r: any) => r.date as string);
+    if (!dates.includes(today)) return 0;
+    // Count consecutive days ending today
+    let streak = 1;
+    let current = new Date(today);
+    for (let i = 1; i < dates.length; i++) {
+      const prev = new Date(current);
+      prev.setDate(prev.getDate() - 1);
+      const prevStr = prev.toISOString().slice(0, 10);
+      if (dates[i] === prevStr) {
+        streak++;
+        current = prev;
+      } else {
+        break;
+      }
+    }
+    return streak;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getTodayLeaderboard(date: string): Promise<Array<{
+  userId: number;
+  firstName: string;
+  avatarUrl: string | null;
+  rating: number;
+  note: string | null;
+  streak: number;
+  createdAt: Date;
+}>> {
+  const pool = getPool();
+  if (!pool) return [];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT c.userId, c.rating, c.note, c.createdAt, u.name, u.avatarUrl
+       FROM \`daily_check_ins\` c
+       JOIN \`users\` u ON u.id = c.userId
+       WHERE c.date = ?
+       ORDER BY c.rating DESC, c.createdAt ASC`,
+      [date]
+    );
+    const entries = rows as any[];
+    // Calculate streaks for each user
+    const result = await Promise.all(entries.map(async (row: any) => {
+      const streak = await getUserCheckInStreak(row.userId, date);
+      return {
+        userId: row.userId,
+        firstName: (row.name as string || "Friend").split(" ")[0],
+        avatarUrl: (row.avatarUrl as string | null) ?? null,
+        rating: row.rating as number,
+        note: (row.note as string | null) ?? null,
+        streak,
+        createdAt: row.createdAt as Date,
+      };
+    }));
+    return result;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getCommunityMessages(limit = 50): Promise<Array<{
+  id: number;
+  userId: number;
+  firstName: string;
+  avatarUrl: string | null;
+  content: string;
+  createdAt: Date;
+}>> {
+  const pool = getPool();
+  if (!pool) return [];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT m.id, m.userId, m.content, m.createdAt, u.name, u.avatarUrl
+       FROM \`community_messages\` m
+       JOIN \`users\` u ON u.id = m.userId
+       ORDER BY m.createdAt DESC
+       LIMIT ?`,
+      [limit]
+    );
+    return (rows as any[]).reverse().map((row: any) => ({
+      id: row.id as number,
+      userId: row.userId as number,
+      firstName: (row.name as string || "Friend").split(" ")[0],
+      avatarUrl: (row.avatarUrl as string | null) ?? null,
+      content: row.content as string,
+      createdAt: row.createdAt as Date,
+    }));
+  } finally {
+    conn.release();
+  }
+}
+
+export async function sendCommunityMessage(userId: number, content: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `INSERT INTO \`community_messages\` (userId, content) VALUES (?, ?)`,
+      [userId, content]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+export async function deleteCommunityMessage(messageId: number, userId: number): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `DELETE FROM \`community_messages\` WHERE id = ? AND userId = ?`,
+      [messageId, userId]
+    );
+  } finally {
+    conn.release();
+  }
 }

@@ -401,3 +401,29 @@ export const dailyDevotions = mysqlTable("daily_devotions", {
 });
 export type DailyDevotion = typeof dailyDevotions.$inferSelect;
 export type InsertDailyDevotion = typeof dailyDevotions.$inferInsert;
+
+// ── Community: Daily Productivity Check-ins ───────────────────────────────────
+export const dailyCheckIns = mysqlTable("daily_check_ins", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  date: varchar("date", { length: 10 }).notNull(),   // YYYY-MM-DD
+  rating: int("rating").notNull(),                   // 1-5
+  note: varchar("note", { length: 500 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  userDateIdx: index("daily_check_ins_userId_date").on(table.userId, table.date),
+  dateIdx: index("daily_check_ins_date").on(table.date),
+}));
+export type DailyCheckIn = typeof dailyCheckIns.$inferSelect;
+
+// ── Community: Chat Messages ───────────────────────────────────────────────────
+export const communityMessages = mysqlTable("community_messages", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  content: varchar("content", { length: 1000 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  createdAtIdx: index("community_messages_createdAt").on(table.createdAt),
+}));
+export type CommunityMessage = typeof communityMessages.$inferSelect;

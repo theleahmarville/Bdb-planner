@@ -53,6 +53,12 @@ import {
   deleteReminder,
   markReminderSent,
   globalSearch,
+  upsertDailyCheckIn,
+  getMyCheckIn,
+  getTodayLeaderboard,
+  getCommunityMessages,
+  sendCommunityMessage,
+  deleteCommunityMessage,
 } from "./db";
 import bcrypt from "bcryptjs";
 
@@ -1704,6 +1710,51 @@ const googleCalendarRouter = router({
   }),
 });
 
+// ─── Community Router ─────────────────────────────────────────────────────────
+const communityRouter = router({
+  checkIn: protectedProcedure
+    .input(z.object({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      rating: z.number().int().min(1).max(5),
+      note: z.string().max(500).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await upsertDailyCheckIn(ctx.user.id, input.date, input.rating, input.note);
+      return { success: true };
+    }),
+
+  myCheckIn: protectedProcedure
+    .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+    .query(async ({ ctx, input }) => {
+      return getMyCheckIn(ctx.user.id, input.date);
+    }),
+
+  leaderboard: protectedProcedure
+    .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+    .query(async ({ input }) => {
+      return getTodayLeaderboard(input.date);
+    }),
+
+  messages: protectedProcedure
+    .query(async () => {
+      return getCommunityMessages(50);
+    }),
+
+  sendMessage: protectedProcedure
+    .input(z.object({ content: z.string().min(1).max(1000).trim() }))
+    .mutation(async ({ ctx, input }) => {
+      await sendCommunityMessage(ctx.user.id, input.content);
+      return { success: true };
+    }),
+
+  deleteMessage: protectedProcedure
+    .input(z.object({ messageId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      await deleteCommunityMessage(input.messageId, ctx.user.id);
+      return { success: true };
+    }),
+});
+
 // ─── App Router ───────────────────────────────────────────────────────────────
 export const appRouter = router({
   system: systemRouter,
@@ -1737,5 +1788,6 @@ export const appRouter = router({
       .input(z.object({ query: z.string().min(1).max(200) }))
       .query(async ({ ctx, input }) => globalSearch(ctx.user.id, input.query)),
   }),
+  community: communityRouter,
 });
 export type AppRouter = typeof appRouter;

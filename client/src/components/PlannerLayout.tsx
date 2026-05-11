@@ -21,6 +21,7 @@ import {
   Moon,
   Bell,
   Settings,
+  Users,
 } from "lucide-react";
 import { MONTHS } from "@/lib/planner";
 import { cn } from "@/lib/utils";
@@ -125,6 +126,7 @@ export default function PlannerLayout({
   const isNotes = location === "/notes";
   const isIntegrations = location === "/integrations";
   const isZion = location === "/zion";
+  const isCommunity = location === "/community";
 
   const getPageTitle = () => {
     if (isYearCal) return `${currentYear} Year Calendar`;
@@ -134,6 +136,7 @@ export default function PlannerLayout({
     if (isNotes) return "Notes";
     if (isIntegrations) return "Integrations";
     if (isZion) return "Zion AI Assistant";
+    if (isCommunity) return "Community";
     return "BDB Planner";
   };
 
@@ -248,6 +251,14 @@ export default function PlannerLayout({
           <div className={cn("sidebar-nav-item", isNotes && "active")} title={!sidebarOpen ? "Notes" : undefined}>
             <StickyNote size={18} className="flex-shrink-0" />
             {sidebarOpen && <span>Notes</span>}
+          </div>
+        </Link>
+
+        {/* Community */}
+        <Link href="/community">
+          <div className={cn("sidebar-nav-item", isCommunity && "active")} title={!sidebarOpen ? "Community" : undefined}>
+            <Users size={18} className="flex-shrink-0 text-violet-500" />
+            {sidebarOpen && <span className="text-violet-600 font-medium">Community</span>}
           </div>
         </Link>
 

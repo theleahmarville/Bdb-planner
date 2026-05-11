@@ -16,6 +16,7 @@ import ZionPage from "./pages/ZionPage";
 import SettingsPage from "./pages/SettingsPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import OnboardingPage from "./pages/OnboardingPage";
+import CommunityPage from "./pages/CommunityPage";
 import PlannerLayout from "./components/PlannerLayout";
 import { useState } from "react";
 import { getISOWeek, getISOWeekYear } from "date-fns";
@@ -52,6 +53,7 @@ function PlannerRouter() {
         <Route path="/year-calendar/:year" component={YearCalendarPage} />
         <Route path="/integrations" component={IntegrationsPage} />
         <Route path="/notes" component={NotesPage} />
+        <Route path="/community" component={CommunityPage} />
         <Route path="/zion" component={ZionPage} />
         <Route path="/settings" component={SettingsPage} />
         <Route path="/404" component={NotFound} />
