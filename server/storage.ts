@@ -98,14 +98,16 @@ export async function storagePut(
     // ── S3 path ──────────────────────────────────────────────────────────────
     const body = typeof data === "string" ? Buffer.from(data) : data;
 
+    const isR2 = !!process.env.S3_ENDPOINT?.includes("r2.cloudflarestorage.com");
+
     await s3.send(
       new PutObjectCommand({
         Bucket: s3Bucket(),
         Key: key,
         Body: body as Buffer,
         ContentType: contentType,
-        // Make objects publicly readable (standard for vision boards / avatars)
-        ACL: "public-read",
+        // ACL only supported on AWS S3 — R2 uses bucket-level public access
+        ...(!isR2 && { ACL: "public-read" }),
       }),
     );
 
