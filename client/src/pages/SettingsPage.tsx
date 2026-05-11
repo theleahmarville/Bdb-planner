@@ -44,8 +44,8 @@ export default function SettingsPage() {
       const formData = new FormData();
       formData.append("file", file);
       const res = await fetch("/api/upload/avatar", { method: "POST", body: formData, credentials: "include" });
-      if (!res.ok) throw new Error("Upload failed");
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
       setAvatarUrl(data.url);
 
       // Save immediately to profile

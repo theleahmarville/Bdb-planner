@@ -100,16 +100,24 @@ export async function storagePut(
 
     const isR2 = !!process.env.S3_ENDPOINT?.includes("r2.cloudflarestorage.com");
 
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: s3Bucket(),
-        Key: key,
-        Body: body as Buffer,
-        ContentType: contentType,
-        // ACL only supported on AWS S3 — R2 uses bucket-level public access
-        ...(!isR2 && { ACL: "public-read" }),
-      }),
-    );
+    try {
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: s3Bucket(),
+          Key: key,
+          Body: body as Buffer,
+          ContentType: contentType,
+          // ACL only supported on AWS S3 — R2 uses bucket-level public access
+          ...(!isR2 && { ACL: "public-read" }),
+        }),
+      );
+    } catch (s3Err: any) {
+      const code = s3Err?.Code || s3Err?.code || s3Err?.name || "Unknown";
+      const message = s3Err?.message || String(s3Err);
+      console.error(`[Storage] S3/R2 upload failed — Code: ${code} | Message: ${message}`);
+      console.error(`[Storage] Bucket: ${s3Bucket()} | Key: ${key} | Endpoint: ${process.env.S3_ENDPOINT || "default"}`);
+      throw new Error(`Storage upload failed (${code}): ${message}`);
+    }
 
     return { key, url: s3PublicUrl(key) };
   }

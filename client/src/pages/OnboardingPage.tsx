@@ -89,12 +89,13 @@ export default function OnboardingPage() {
       const formData = new FormData();
       formData.append("file", file);
       const res = await fetch("/api/upload/avatar", { method: "POST", body: formData, credentials: "include" });
-      if (!res.ok) throw new Error("Upload failed");
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
       setAvatarUrl(data.url);
       toast.success("Photo uploaded!");
-    } catch {
-      toast.error("Upload failed — you can add a photo later in Settings");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Upload failed";
+      toast.error(`Upload failed: ${msg}`);
       setAvatarPreview(null);
     } finally {
       setUploadingAvatar(false);
