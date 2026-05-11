@@ -164,6 +164,25 @@ async function startServer() {
     }
   });
 
+  // ─── Storage test endpoint (admin-only debug) ────────────────────────────────
+  app.get("/api/storage-test", async (_req, res) => {
+    const cfg = {
+      S3_BUCKET: process.env.S3_BUCKET || "(not set)",
+      S3_REGION: process.env.S3_REGION || "(not set)",
+      S3_ENDPOINT: process.env.S3_ENDPOINT || "(not set)",
+      S3_ACCESS_KEY_ID: process.env.S3_ACCESS_KEY_ID ? `${process.env.S3_ACCESS_KEY_ID.slice(0, 6)}…` : "(not set)",
+      S3_SECRET_ACCESS_KEY: process.env.S3_SECRET_ACCESS_KEY ? "set (hidden)" : "(not set)",
+      S3_PUBLIC_URL: process.env.S3_PUBLIC_URL || "(not set)",
+    };
+    try {
+      const { storagePut } = await import("../storage");
+      const { url } = await storagePut("_test/ping.txt", "ok", "text/plain");
+      res.json({ status: "ok", url, config: cfg });
+    } catch (err: any) {
+      res.status(500).json({ status: "error", error: err.message, config: cfg });
+    }
+  });
+
   // Serve local uploads (fallback when S3 is not configured)
   app.use("/uploads", express.static(LOCAL_UPLOADS_DIR));
 
