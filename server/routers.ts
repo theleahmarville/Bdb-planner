@@ -735,7 +735,9 @@ import { invokeLLM } from "./_core/llm";
 const zionRouter = router({
 
   // ── Daily personalised greeting ───────────────────────────────────────────
-  dailyGreeting: protectedProcedure.query(async ({ ctx }) => {
+  dailyGreeting: protectedProcedure
+    .input(z.object({ timezone: z.string().optional() }).optional())
+    .query(async ({ ctx, input }) => {
     const userId = ctx.user.id;
     const context = await getUserPlannerContext(userId);
 
@@ -748,13 +750,19 @@ const zionRouter = router({
     const gender = userRow?.gender ?? 'other';
     const firstName = ctx.user.name?.split(' ')[0] || 'friend';
 
-    // Use user's stored timezone so the greeting matches their local time of day
-    // (Railway server runs in UTC — without this, a user in UTC-4 gets "afternoon" at 8am)
-    const userTimezone = (userRow as any)?.timezone || 'UTC';
-    const hour = parseInt(
-      new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: userTimezone }).format(new Date()),
-      10
-    );
+    // Priority: 1) timezone sent by the browser (always accurate), 2) saved in profile, 3) UTC fallback
+    // Railway runs in UTC so we must never use new Date().getHours() directly
+    const userTimezone = input?.timezone || (userRow as any)?.timezone || 'UTC';
+    let hour: number;
+    try {
+      hour = parseInt(
+        new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: userTimezone }).format(new Date()),
+        10
+      );
+    } catch {
+      // Invalid timezone string — fall back to UTC
+      hour = new Date().getUTCHours();
+    }
     const timeOfDay = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : hour < 21 ? 'evening' : 'night';
 
     const pronounContext = gender === 'female'

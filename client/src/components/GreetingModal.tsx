@@ -29,10 +29,17 @@ export default function GreetingModal({ onDismissed }: GreetingModalProps = {}) 
   // Only show once per session (not once per day, so every login gets a greeting)
   const sessionKey = `greeting-shown-${user?.id}-${new Date().toISOString().slice(0, 10)}`;
 
-  const { data, isLoading } = trpc.zion.dailyGreeting.useQuery(undefined, {
-    enabled: isAuthenticated && !dismissed,
-    staleTime: Infinity, // don't refetch during session
-  });
+  // Pass the browser's local timezone so the server uses the correct time of day
+  // (Railway runs in UTC — without this the server would compute the wrong greeting)
+  const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  const { data, isLoading } = trpc.zion.dailyGreeting.useQuery(
+    { timezone: browserTimezone },
+    {
+      enabled: isAuthenticated && !dismissed,
+      staleTime: Infinity, // don't refetch during session
+    }
+  );
 
   useEffect(() => {
     if (!isAuthenticated) return;
