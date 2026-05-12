@@ -10,12 +10,13 @@ import { useDebounce } from "@/hooks/useDebounce";
 import {
   Search, X, FileText, Image as ImageIcon, BookOpen,
   Target, Bell, Link2, Sheet, StickyNote, Globe, Loader2,
-  ExternalLink,
+  ExternalLink, LayoutGrid,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Icon by result type / file type ──────────────────────────────────────────
 function ResultIcon({ type, fileType }: { type: string; fileType?: string }) {
+  if (type === "page") return <LayoutGrid className="w-4 h-4 text-emerald-600 shrink-0" />;
   if (type === "note") return <StickyNote className="w-4 h-4 text-blue-500 shrink-0" />;
   if (type === "goal") return <Target className="w-4 h-4 text-purple-500 shrink-0" />;
   if (type === "reminder") return <Bell className="w-4 h-4 text-red-500 shrink-0" />;
@@ -32,12 +33,96 @@ function ResultIcon({ type, fileType }: { type: string; fileType?: string }) {
 }
 
 const TYPE_LABEL: Record<string, string> = {
+  page: "Page",
   note: "Note",
+  annual: "Annual Plan",
   attachment: "File / Link",
   goal: "Big Goal",
   reminder: "Reminder",
+  weekly: "Weekly Plan",
+  visionboard: "Vision Board",
   todo: "To-Do",
 };
+
+// ── Static app pages — always searchable ─────────────────────────────────────
+const APP_PAGES = [
+  {
+    id: "page-annual", type: "page", title: "Annual Planning",
+    excerpt: "Vision, goals, mission statement, personal contract",
+    navPath: "/annual",
+    keywords: ["annual", "planning", "year", "goals", "vision", "mission", "contract", "budget", "timeline"],
+  },
+  {
+    id: "page-visionboard", type: "page", title: "Vision Board",
+    excerpt: "Upload photos & link your Pinterest board",
+    navPath: "/annual",
+    keywords: ["vision board", "vision", "board", "photos", "images", "pinterest", "collage", "inspiration"],
+  },
+  {
+    id: "page-weekly", type: "page", title: "Weekly View",
+    excerpt: "Weekly priorities, habits, wins & schedule",
+    navPath: "/weekly",
+    keywords: ["weekly", "week", "habits", "priorities", "schedule", "wins", "planner"],
+  },
+  {
+    id: "page-monthly", type: "page", title: "Monthly View",
+    excerpt: "Monthly theme, to-dos & financial targets",
+    navPath: "/monthly",
+    keywords: ["monthly", "month", "theme", "targets", "to-do", "financial"],
+  },
+  {
+    id: "page-community", type: "page", title: "Community",
+    excerpt: "Daily check-ins, leaderboard & group chat",
+    navPath: "/community",
+    keywords: ["community", "leaderboard", "check-in", "checkin", "chat", "productivity", "streak"],
+  },
+  {
+    id: "page-notes", type: "page", title: "Notes",
+    excerpt: "Personal notes & journal entries",
+    navPath: "/notes",
+    keywords: ["notes", "note", "journal", "writing"],
+  },
+  {
+    id: "page-settings", type: "page", title: "Settings & Profile",
+    excerpt: "Update your name, photo, bio, password & timezone",
+    navPath: "/settings",
+    keywords: ["settings", "profile", "password", "avatar", "photo", "timezone", "account", "bio", "name"],
+  },
+  {
+    id: "page-content", type: "page", title: "Content Calendar",
+    excerpt: "Plan your social media content by week",
+    navPath: "/content-calendar",
+    keywords: ["content", "calendar", "social media", "posts", "instagram", "tiktok", "platform"],
+  },
+  {
+    id: "page-zion", type: "page", title: "Zion AI Coach",
+    excerpt: "Your personal AI wellness coach — click the sparkle icon in the sidebar",
+    navPath: "action:openZion",
+    keywords: ["zion", "ai", "coach", "assistant", "artificial intelligence", "chat"],
+  },
+  {
+    id: "page-reminders", type: "page", title: "Reminders",
+    excerpt: "Set alerts for important tasks & events — click the bell icon in the sidebar",
+    navPath: "action:openReminders",
+    keywords: ["reminders", "reminder", "notifications", "alert", "alarm"],
+  },
+  {
+    id: "page-devotion", type: "page", title: "Daily Devotion",
+    excerpt: "Morning bible verse & affirmation — click the moon icon in the sidebar",
+    navPath: "action:openDevotion",
+    keywords: ["devotion", "bible", "verse", "affirmation", "morning", "spiritual"],
+  },
+];
+
+function searchNavPages(query: string) {
+  if (!query || query.length < 2) return [];
+  const q = query.toLowerCase();
+  return APP_PAGES.filter(p =>
+    p.title.toLowerCase().includes(q) ||
+    p.excerpt.toLowerCase().includes(q) ||
+    p.keywords.some(k => k.includes(q) || q.includes(k))
+  );
+}
 
 // ── Hook: detect Cmd+K / Ctrl+K ──────────────────────────────────────────────
 function useSearchShortcut(onOpen: () => void) {
@@ -67,10 +152,14 @@ export default function GlobalSearch({ inline = false }: GlobalSearchProps) {
 
   const debouncedQuery = useDebounce(query, 300);
 
-  const { data: results = [], isFetching } = trpc.search.global.useQuery(
+  const { data: dbResults = [], isFetching } = trpc.search.global.useQuery(
     { query: debouncedQuery },
     { enabled: debouncedQuery.length >= 2, staleTime: 30_000 }
   );
+
+  // Merge nav pages (instant, client-side) + DB results
+  const navPages = debouncedQuery.length >= 2 ? searchNavPages(debouncedQuery) : [];
+  const results = [...navPages, ...dbResults];
 
   const handleOpen = useCallback(() => {
     setOpen(true);
@@ -89,13 +178,20 @@ export default function GlobalSearch({ inline = false }: GlobalSearchProps) {
   useEffect(() => { setActiveIdx(0); }, [results]);
 
   const handleSelect = (item: (typeof results)[0]) => {
-    // Attachments / links open directly in new tab
-    if (item.type === "attachment" && item.fileUrl) {
-      window.open(item.fileUrl, "_blank", "noopener");
-    } else if (item.navPath) {
-      navigate(item.navPath);
-    }
     handleClose();
+    // Attachments / links open directly in new tab
+    if (item.type === "attachment" && (item as any).fileUrl) {
+      window.open((item as any).fileUrl, "_blank", "noopener");
+      return;
+    }
+    const path = (item as any).navPath as string | null;
+    if (!path) return;
+    // Sidebar panel actions — dispatch a custom event PlannerLayout listens to
+    if (path.startsWith("action:")) {
+      window.dispatchEvent(new CustomEvent("bdb:open-panel", { detail: path.replace("action:", "") }));
+      return;
+    }
+    navigate(path);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

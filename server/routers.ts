@@ -59,6 +59,13 @@ import {
   getCommunityMessages,
   sendCommunityMessage,
   deleteCommunityMessage,
+  adminDeleteCommunityMessage,
+  toggleMessageReaction,
+  flagCommunityMessage,
+  isUserAdmin,
+  savePushSubscription,
+  deletePushSubscription,
+  getUserPushSubscriptions,
 } from "./db";
 import bcrypt from "bcryptjs";
 
@@ -111,6 +118,8 @@ const annualRouter = router({
           notionDatabaseId: zShortText.optional(),
           notionToken: zShortText.optional(),
           googleCalendarId: zShortText.optional(),
+          visionBoardPinterest: zLongText.optional(),
+          visionBoardCoverUrl: zLongText.optional(),
         }),
       })
     )
@@ -1736,8 +1745,9 @@ const communityRouter = router({
     }),
 
   messages: protectedProcedure
-    .query(async () => {
-      return getCommunityMessages(50);
+    .input(z.object({ beforeId: z.number().optional() }).optional())
+    .query(async ({ input }) => {
+      return getCommunityMessages({ beforeId: input?.beforeId, limit: 50 });
     }),
 
   sendMessage: protectedProcedure
@@ -1753,6 +1763,63 @@ const communityRouter = router({
       await deleteCommunityMessage(input.messageId, ctx.user.id);
       return { success: true };
     }),
+
+  adminDeleteMessage: protectedProcedure
+    .input(z.object({ messageId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const admin = await isUserAdmin(ctx.user.id);
+      if (!admin) throw new Error("Unauthorized");
+      await adminDeleteCommunityMessage(input.messageId);
+      return { success: true };
+    }),
+
+  reactToMessage: protectedProcedure
+    .input(z.object({ messageId: z.number(), emoji: z.string().max(10) }))
+    .mutation(async ({ ctx, input }) => {
+      await toggleMessageReaction(input.messageId, ctx.user.id, input.emoji);
+      return { success: true };
+    }),
+
+  flagMessage: protectedProcedure
+    .input(z.object({ messageId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      await flagCommunityMessage(input.messageId);
+      return { success: true };
+    }),
+
+  isAdmin: protectedProcedure.query(async ({ ctx }) => {
+    return isUserAdmin(ctx.user.id);
+  }),
+});
+
+// ─── Push Notifications Router ───────────────────────────────────────────────
+const pushRouter = router({
+  vapidPublicKey: publicProcedure.query(() => {
+    return process.env.VAPID_PUBLIC_KEY || null;
+  }),
+
+  subscribe: protectedProcedure
+    .input(z.object({
+      endpoint: z.string().url(),
+      p256dh: z.string().min(1),
+      auth: z.string().min(1),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await savePushSubscription(ctx.user.id, input.endpoint, input.p256dh, input.auth);
+      return { success: true };
+    }),
+
+  unsubscribe: protectedProcedure
+    .input(z.object({ endpoint: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await deletePushSubscription(ctx.user.id, input.endpoint);
+      return { success: true };
+    }),
+
+  status: protectedProcedure.query(async ({ ctx }) => {
+    const subs = await getUserPushSubscriptions(ctx.user.id);
+    return { subscribed: subs.length > 0, count: subs.length };
+  }),
 });
 
 // ─── App Router ───────────────────────────────────────────────────────────────
@@ -1789,5 +1856,6 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => globalSearch(ctx.user.id, input.query)),
   }),
   community: communityRouter,
+  push: pushRouter,
 });
 export type AppRouter = typeof appRouter;

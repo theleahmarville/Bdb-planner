@@ -213,7 +213,7 @@ export function registerAuthRoutes(app: Express) {
     try {
       const user = await authService.authenticateRequest(req);
       if (!user) { res.status(401).json({ error: "Not authenticated" }); return; }
-      const { name, currentPassword, newPassword, avatarUrl, bio, timezone, onboardingCompleted } = req.body;
+      const { name, currentPassword, newPassword, newEmail, avatarUrl, bio, timezone, onboardingCompleted } = req.body;
       const dbUser = await db.getUserByOpenId(user.openId);
       if (!dbUser) { res.status(404).json({ error: "User not found" }); return; }
       const updates: Record<string, any> = { openId: user.openId };
@@ -222,6 +222,20 @@ export function registerAuthRoutes(app: Express) {
       if (bio !== undefined) updates.bio = bio.trim().slice(0, 280) || null;
       if (timezone !== undefined) updates.timezone = timezone;
       if (onboardingCompleted !== undefined) updates.onboardingCompleted = onboardingCompleted;
+      // ── Email change ────────────────────────────────────────────────────────
+      if (newEmail) {
+        if (!currentPassword) { res.status(400).json({ error: "Current password is required to change email" }); return; }
+        if (!dbUser.passwordHash) { res.status(400).json({ error: "No password set on this account" }); return; }
+        const validForEmail = await bcrypt.compare(currentPassword, dbUser.passwordHash);
+        if (!validForEmail) { res.status(401).json({ error: "Current password is incorrect" }); return; }
+        const normalizedEmail = newEmail.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) { res.status(400).json({ error: "Invalid email address" }); return; }
+        if (normalizedEmail === dbUser.email?.toLowerCase()) { res.status(400).json({ error: "That is already your current email" }); return; }
+        const existing = await db.getUserByEmail(normalizedEmail);
+        if (existing) { res.status(409).json({ error: "An account with this email already exists" }); return; }
+        updates.email = normalizedEmail;
+      }
+      // ── Password change ─────────────────────────────────────────────────────
       if (newPassword) {
         if (!currentPassword) { res.status(400).json({ error: "Current password is required" }); return; }
         if (!dbUser.passwordHash) { res.status(400).json({ error: "No password set on this account" }); return; }

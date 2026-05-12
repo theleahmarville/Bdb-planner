@@ -22,6 +22,8 @@ import {
   Bell,
   Settings,
   Users,
+  Flame,
+  Trophy,
 } from "lucide-react";
 import { MONTHS } from "@/lib/planner";
 import { cn } from "@/lib/utils";
@@ -34,6 +36,92 @@ import RemindersPanel from "./RemindersPanel";
 import GlobalSearch from "./GlobalSearch";
 import { trpc } from "@/lib/trpc";
 import { useReminderNotifications } from "@/hooks/useReminderNotifications";
+
+// ── Sidebar Leaderboard Preview ───────────────────────────────────────────────
+const MEDALS = ["🥇", "🥈", "🥉"];
+const RATING_EMOJI: Record<number, string> = { 1: "😴", 2: "😐", 3: "💪", 4: "🔥", 5: "⚡" };
+
+function SidebarLeaderboard({ onNavigate }: { onNavigate: () => void }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: entries = [] } = trpc.community.leaderboard.useQuery(
+    { date: today },
+    { refetchInterval: 30_000, staleTime: 20_000 }
+  );
+
+  const top = entries.slice(0, 3);
+
+  return (
+    <Link href="/community" onClick={onNavigate}>
+      <div className="mx-2 mb-2 rounded-xl bg-sidebar-accent/60 border border-sidebar-border overflow-hidden cursor-pointer hover:bg-sidebar-accent transition-colors group">
+        {/* Header */}
+        <div className="flex items-center justify-between px-3 pt-2.5 pb-1.5">
+          <div className="flex items-center gap-1.5">
+            <Trophy size={11} className="text-yellow-500 flex-shrink-0" />
+            <span className="text-[11px] font-bold text-sidebar-foreground/80 uppercase tracking-wider">
+              Leaderboard
+            </span>
+          </div>
+          <span className="text-[10px] text-sidebar-foreground/40 group-hover:text-emerald-400 transition-colors">
+            View all →
+          </span>
+        </div>
+
+        {/* Entries */}
+        {top.length === 0 ? (
+          <div className="px-3 pb-2.5 text-[11px] text-sidebar-foreground/40 italic">
+            No check-ins yet today
+          </div>
+        ) : (
+          <div className="px-2 pb-2 space-y-1">
+            {top.map((entry, i) => (
+              <div key={entry.userId} className="flex items-center gap-2 px-1 py-1 rounded-lg hover:bg-sidebar-accent transition-colors">
+                {/* Medal / rank */}
+                <span className="text-[12px] w-4 text-center flex-shrink-0 leading-none">
+                  {MEDALS[i]}
+                </span>
+
+                {/* Avatar */}
+                <div className="w-5 h-5 rounded-full flex-shrink-0 overflow-hidden bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center">
+                  {entry.avatarUrl ? (
+                    <img src={entry.avatarUrl} alt={entry.firstName} className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-white text-[8px] font-bold leading-none">
+                      {entry.firstName.charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                </div>
+
+                {/* Name */}
+                <span className="flex-1 text-[11px] font-medium text-sidebar-foreground truncate">
+                  {entry.firstName}
+                </span>
+
+                {/* Rating + streak */}
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  {entry.streak >= 2 && (
+                    <span className="flex items-center gap-0.5 text-[9px] font-bold text-orange-400">
+                      <Flame size={8} />{entry.streak}
+                    </span>
+                  )}
+                  <span className="text-[11px] leading-none">
+                    {RATING_EMOJI[entry.rating] ?? "⭐"}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Check-in count */}
+        {entries.length > 0 && (
+          <div className="px-3 pb-2 text-[10px] text-sidebar-foreground/40">
+            {entries.length} member{entries.length !== 1 ? "s" : ""} checked in
+          </div>
+        )}
+      </div>
+    </Link>
+  );
+}
 
 interface PlannerLayoutProps {
   children: React.ReactNode;
@@ -117,6 +205,18 @@ export default function PlannerLayout({
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setDrawerOpen(false); };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  // Listen for search panel-open actions
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const action = (e as CustomEvent).detail as string;
+      if (action === "openZion") setDigestOpen(true);
+      if (action === "openReminders") setRemindersOpen(true);
+      if (action === "openDevotion") setDevotionOpen(true);
+    };
+    window.addEventListener("bdb:open-panel", handler);
+    return () => window.removeEventListener("bdb:open-panel", handler);
   }, []);
 
   const isAnnual = location === "/" || location.startsWith("/annual");
@@ -261,6 +361,11 @@ export default function PlannerLayout({
             {sidebarOpen && <span className="text-violet-600 font-medium">Community</span>}
           </div>
         </Link>
+
+        {/* Leaderboard preview — only shown when sidebar is expanded */}
+        {sidebarOpen && isAuthenticated && (
+          <SidebarLeaderboard onNavigate={() => setDrawerOpen(false)} />
+        )}
 
         {/* Integrations */}
         <Link href="/integrations">

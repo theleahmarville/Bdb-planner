@@ -4,13 +4,39 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import {
-  Upload, X, ExternalLink, Loader2, Pin, Link2, Plus, ImageIcon,
+  Upload, X, ExternalLink, Loader2, Pin, Plus, ImageIcon, Camera,
 } from "lucide-react";
 
 interface VisionBoardTabProps {
   year: number;
   pinterestUrl?: string;
   onPinterestUrlChange?: (url: string) => void;
+  pinterestCoverUrl?: string;
+  onPinterestCoverUrlChange?: (url: string) => void;
+}
+
+/** Auto-fetch Pinterest board OG thumbnail via microlink.io */
+function usePinterestThumbnail(url: string, manualCoverUrl: string) {
+  const [thumb, setThumb] = useState<string | null>(manualCoverUrl || null);
+
+  useEffect(() => {
+    // Manual cover always wins
+    if (manualCoverUrl) { setThumb(manualCoverUrl); return; }
+    if (!url) { setThumb(null); return; }
+    let cancelled = false;
+    setThumb(null);
+    fetch(`https://api.microlink.io/?url=${encodeURIComponent(url)}&meta=false`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (cancelled) return;
+        const img = data?.data?.image?.url || data?.data?.screenshot?.url || null;
+        if (img) setThumb(img);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [url, manualCoverUrl]);
+
+  return thumb;
 }
 
 /** Extract a readable board name from a Pinterest URL */
@@ -18,7 +44,6 @@ function parsePinterestBoard(url: string): { user: string; board: string } | nul
   try {
     const clean = url.replace(/\/$/, "");
     const parts = clean.split("/").filter(Boolean);
-    // pinterest.com / username / board-name
     const idx = parts.findIndex((p) => p.includes("pinterest.com"));
     if (idx === -1) return null;
     const user = parts[idx + 1] ?? "";
@@ -29,47 +54,31 @@ function parsePinterestBoard(url: string): { user: string; board: string } | nul
   }
 }
 
-/** Load / re-init the Pinterest embed widget script */
-function usePinterestWidget(active: boolean) {
-  useEffect(() => {
-    if (!active) return;
-    // If already loaded, call PinUtils.build() to pick up new elements
-    if ((window as any).PinUtils) {
-      try { (window as any).PinUtils.build(); } catch { /* ignore */ }
-      return;
-    }
-    const existing = document.getElementById("pinterest-pinit-js");
-    if (existing) return;
-    const s = document.createElement("script");
-    s.id = "pinterest-pinit-js";
-    s.src = "//assets.pinterest.com/js/pinit.js";
-    s.async = true;
-    s.defer = true;
-    document.body.appendChild(s);
-  }, [active]);
-}
-
 export default function VisionBoardTab({
   year,
   pinterestUrl = "",
   onPinterestUrlChange,
+  pinterestCoverUrl = "",
+  onPinterestCoverUrlChange,
 }: VisionBoardTabProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [editingCaption, setEditingCaption] = useState<number | null>(null);
   const [captionValue, setCaptionValue] = useState("");
   const [localPinterestUrl, setLocalPinterestUrl] = useState(pinterestUrl);
+  const [localCoverUrl, setLocalCoverUrl] = useState(pinterestCoverUrl);
   const [editingPinterest, setEditingPinterest] = useState(false);
+  const [editingCover, setEditingCover] = useState(false);
+  const [coverInput, setCoverInput] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Keep local URL in sync if parent prop changes
   useEffect(() => { setLocalPinterestUrl(pinterestUrl); }, [pinterestUrl]);
+  useEffect(() => { setLocalCoverUrl(pinterestCoverUrl); }, [pinterestCoverUrl]);
 
-  // Load Pinterest widget script when we have a board URL
-  usePinterestWidget(!!localPinterestUrl);
+  // Auto-fetch thumbnail from microlink (falls back to manual cover)
+  const thumbnail = usePinterestThumbnail(localPinterestUrl, localCoverUrl);
 
   const { data: images = [], refetch } = trpc.visionBoard.listImages.useQuery({ year });
-
   const addImageMutation = trpc.visionBoard.addImage.useMutation({ onSuccess: () => refetch() });
   const updateCaptionMutation = trpc.visionBoard.updateCaption.useMutation({ onSuccess: () => refetch() });
   const deleteImageMutation = trpc.visionBoard.deleteImage.useMutation({ onSuccess: () => refetch() });
@@ -123,6 +132,13 @@ export default function VisionBoardTab({
     toast.success("Pinterest board linked!");
   };
 
+  const saveCoverUrl = () => {
+    onPinterestCoverUrlChange?.(coverInput.trim());
+    setLocalCoverUrl(coverInput.trim());
+    setEditingCover(false);
+    if (coverInput.trim()) toast.success("Cover photo set!");
+  };
+
   const boardInfo = localPinterestUrl ? parsePinterestBoard(localPinterestUrl) : null;
   const hasContent = images.length > 0 || !!localPinterestUrl;
 
@@ -131,7 +147,6 @@ export default function VisionBoardTab({
 
       {/* ── Controls bar ──────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 flex-wrap">
-        {/* Pinterest button */}
         {editingPinterest ? (
           <div className="flex gap-2 flex-1 min-w-0">
             <Input
@@ -169,7 +184,6 @@ export default function VisionBoardTab({
 
         <div className="flex-1" />
 
-        {/* Upload button */}
         <button
           onClick={() => !uploading && fileInputRef.current?.click()}
           disabled={uploading}
@@ -182,17 +196,15 @@ export default function VisionBoardTab({
 
       <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileChange} />
 
-      {/* ── Empty state with upload zone ─────────────────────────────────────── */}
+      {/* ── Empty state ────────────────────────────────────────────────────────── */}
       {!hasContent && (
         <div
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
           onDragLeave={() => setIsDragging(false)}
           onDrop={handleDrop}
           onClick={() => !uploading && fileInputRef.current?.click()}
-          className={`
-            relative border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all
-            ${isDragging ? "border-emerald-400 bg-emerald-50 scale-[1.01]" : "border-[#e0d8cf] hover:border-emerald-300 hover:bg-[#faf8f5]"}
-          `}
+          className={`relative border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all
+            ${isDragging ? "border-emerald-400 bg-emerald-50 scale-[1.01]" : "border-[#e0d8cf] hover:border-emerald-300 hover:bg-[#faf8f5]"}`}
         >
           <div className="flex flex-col items-center gap-3">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-100 to-green-50 flex items-center justify-center">
@@ -207,7 +219,7 @@ export default function VisionBoardTab({
         </div>
       )}
 
-      {/* ── Vision collage ────────────────────────────────────────────────────── */}
+      {/* ── Vision collage ─────────────────────────────────────────────────────── */}
       {hasContent && (
         <div
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
@@ -215,56 +227,89 @@ export default function VisionBoardTab({
           onDrop={handleDrop}
           className={`transition-all rounded-2xl ${isDragging ? "ring-2 ring-emerald-400 ring-offset-2" : ""}`}
         >
-          {/* Masonry grid */}
           <div className="columns-2 sm:columns-3 gap-3 space-y-3">
 
-            {/* Pinterest board embed — first tile, spans naturally */}
+            {/* ── Pinterest board card ──────────────────────────────────────── */}
             {localPinterestUrl && (
-              <div className="break-inside-avoid mb-3 rounded-2xl overflow-hidden border border-red-100 bg-white shadow-sm group relative">
-                {/* Pinterest header bar */}
-                <div className="flex items-center justify-between px-3 py-2 bg-red-500">
-                  <div className="flex items-center gap-1.5">
-                    <Pin className="w-3.5 h-3.5 text-white" />
-                    <span className="text-white text-xs font-bold">
-                      {boardInfo ? `${boardInfo.user} / ${boardInfo.board}` : "Pinterest Board"}
-                    </span>
+              <div className="break-inside-avoid mb-3">
+                {/* Main card — clicking opens Pinterest */}
+                <a
+                  href={localPinterestUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-2xl overflow-hidden border border-red-100 bg-white shadow-sm group block no-underline hover:shadow-lg transition-all duration-300"
+                >
+                  {/* Cover image or gradient */}
+                  <div className="relative w-full h-40 overflow-hidden">
+                    {thumbnail ? (
+                      <img
+                        src={thumbnail}
+                        alt="Pinterest board cover"
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-gradient-to-br from-red-400 via-rose-500 to-pink-500 flex items-center justify-center">
+                        <div className="text-center">
+                          <div className="w-12 h-12 rounded-full bg-white/20 mx-auto mb-2 flex items-center justify-center">
+                            <span className="text-white text-2xl font-black">P</span>
+                          </div>
+                          <p className="text-white/80 text-xs font-medium">Tap to open board</p>
+                        </div>
+                      </div>
+                    )}
+                    {/* Overlay */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
+                    {/* Pinterest badge */}
+                    <div className="absolute top-2.5 left-2.5 w-7 h-7 rounded-full bg-red-600 flex items-center justify-center shadow">
+                      <span className="text-white text-sm font-black leading-none">P</span>
+                    </div>
+                    {/* Board name overlay */}
+                    <div className="absolute bottom-0 left-0 right-0 px-3 py-2.5">
+                      <p className="text-[10px] text-white/70 capitalize truncate">{boardInfo?.user || "Pinterest"}</p>
+                      <p className="text-sm font-bold text-white capitalize truncate leading-tight">{boardInfo?.board || "Vision Board"}</p>
+                    </div>
                   </div>
-                  <a
-                    href={localPinterestUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="flex items-center gap-1 text-white/80 hover:text-white text-[10px] font-semibold transition-colors"
-                  >
-                    Open <ExternalLink className="w-2.5 h-2.5" />
-                  </a>
-                </div>
 
-                {/* Pinterest widget embed */}
-                <div className="relative overflow-hidden min-h-[280px] bg-[#fafafa]">
-                  {/* Fallback shown behind widget */}
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center px-4">
-                    <Pin className="w-8 h-8 text-red-200" />
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      Loading board preview…<br />
-                      <a href={localPinterestUrl} target="_blank" rel="noopener noreferrer" className="text-red-400 underline">Open in Pinterest</a>
-                    </p>
+                  {/* Open board CTA */}
+                  <div className="px-3 py-2.5 flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Tap to open on Pinterest</span>
+                    <div className="flex items-center gap-1 text-red-500 text-xs font-bold group-hover:text-red-600">
+                      Open <ExternalLink className="w-3 h-3" />
+                    </div>
                   </div>
-                  {/* Pinterest embed widget — pinit.js replaces this <a> with an iframe */}
-                  <div className="relative z-10">
-                    <a
-                      data-pin-do="embedBoard"
-                      data-pin-scale-height="320"
-                      data-pin-scale-width="340"
-                      data-pin-board-width="340"
-                      href={localPinterestUrl}
+                </a>
+
+                {/* Cover photo setter — sits below the card, not clickable through it */}
+                {editingCover ? (
+                  <div className="mt-2 flex gap-1.5">
+                    <Input
+                      value={coverInput}
+                      onChange={(e) => setCoverInput(e.target.value)}
+                      placeholder="Paste any image URL from Pinterest…"
+                      className="text-xs h-8 flex-1"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveCoverUrl();
+                        if (e.key === "Escape") setEditingCover(false);
+                      }}
                     />
+                    <Button size="sm" onClick={saveCoverUrl} className="h-8 bg-red-500 hover:bg-red-600 text-white border-0 text-xs px-3">Set</Button>
+                    <Button size="sm" variant="ghost" onClick={() => setEditingCover(false)} className="h-8 text-xs px-2">✕</Button>
                   </div>
-                </div>
+                ) : (
+                  <button
+                    onClick={() => { setCoverInput(localCoverUrl); setEditingCover(true); }}
+                    className="mt-1.5 w-full flex items-center justify-center gap-1.5 py-1.5 text-[11px] text-muted-foreground hover:text-red-500 transition-colors"
+                  >
+                    <Camera className="w-3 h-3" />
+                    {localCoverUrl ? "Change cover photo" : "Add cover photo from Pinterest"}
+                  </button>
+                )}
               </div>
             )}
 
-            {/* Uploaded images */}
+            {/* ── Uploaded images ───────────────────────────────────────────── */}
             {images.map((img) => (
               <div
                 key={img.id}
@@ -276,10 +321,7 @@ export default function VisionBoardTab({
                   className="w-full h-auto block transition-transform duration-300 group-hover:scale-[1.02]"
                   loading="lazy"
                 />
-
-                {/* Hover overlay */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-3">
-                  {/* Delete */}
                   <div className="flex justify-end">
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDeleteImage(img.id); }}
@@ -288,8 +330,6 @@ export default function VisionBoardTab({
                       <X className="w-3.5 h-3.5 text-white" />
                     </button>
                   </div>
-
-                  {/* Caption */}
                   <div>
                     {editingCaption === img.id ? (
                       <input
@@ -322,7 +362,7 @@ export default function VisionBoardTab({
               </div>
             ))}
 
-            {/* "Add more" card — last tile */}
+            {/* ── Add more tile ─────────────────────────────────────────────── */}
             <div
               onClick={() => !uploading && fileInputRef.current?.click()}
               className="break-inside-avoid mb-3 rounded-2xl border-2 border-dashed border-[#e0d8cf] hover:border-emerald-400 hover:bg-emerald-50/40 transition-all cursor-pointer flex flex-col items-center justify-center gap-2 py-10 group"
@@ -338,22 +378,8 @@ export default function VisionBoardTab({
                 </>
               )}
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* Pinterest link shortcut when widget is showing */}
-      {localPinterestUrl && images.length > 0 && (
-        <div className="flex justify-center">
-          <a
-            href={localPinterestUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 text-xs text-red-500 hover:text-red-600 font-medium"
-          >
-            <ExternalLink className="w-3 h-3" />
-            Open full Pinterest board
-          </a>
+          </div>
         </div>
       )}
     </div>

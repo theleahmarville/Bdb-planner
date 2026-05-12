@@ -41,6 +41,8 @@ export default function AnnualPage() {
     init.problemsToSolve = annualData.problemsToSolve || "";
     init.vennOverlap = annualData.vennOverlap || "";
     init.visionBoardContent = annualData.visionBoardContent || "";
+    init.visionBoardPinterest = (annualData as any).visionBoardPinterest || "";
+    init.visionBoardCoverUrl = (annualData as any).visionBoardCoverUrl || "";
     init.missionStatement = annualData.missionStatement || "";
     init.elevatorPitch = annualData.elevatorPitch || "";
     init.contractName = annualData.contractName || "";
@@ -338,6 +340,8 @@ export default function AnnualPage() {
             year={YEAR}
             pinterestUrl={localData.visionBoardPinterest || ""}
             onPinterestUrlChange={(url) => update("visionBoardPinterest", url)}
+            pinterestCoverUrl={localData.visionBoardCoverUrl || ""}
+            onPinterestCoverUrlChange={(url) => update("visionBoardCoverUrl", url)}
           />
           <div className="mt-4 planner-card">
             <h3 className="font-bold mb-2 text-sm">Vision Notes</h3>

@@ -6,8 +6,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import {
-  Eye, EyeOff, User, Lock, LogOut, Camera, Globe, Clock, Loader2, X,
+  Eye, EyeOff, User, Lock, LogOut, Camera, Globe, Clock, Loader2, X, Bell,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { usePushNotifications } from "@/hooks/usePushNotifications";
 
 const TIMEZONES = [
   "UTC", "America/New_York", "America/Chicago", "America/Denver",
@@ -18,6 +20,59 @@ const TIMEZONES = [
   "Asia/Dubai", "Asia/Karachi", "Asia/Kolkata", "Asia/Singapore",
   "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland",
 ];
+
+function PushNotificationToggle() {
+  const { status, subscribe, unsubscribe } = usePushNotifications();
+
+  if (status === "unsupported") {
+    return (
+      <p className="text-sm text-muted-foreground bg-[#faf8f5] rounded-xl px-4 py-3">
+        Push notifications are not supported in this browser.
+      </p>
+    );
+  }
+
+  if (status === "denied") {
+    return (
+      <div className="bg-orange-50 border border-orange-200 rounded-xl px-4 py-3">
+        <p className="text-sm font-semibold text-orange-700">Notifications blocked</p>
+        <p className="text-xs text-orange-600 mt-0.5">
+          Enable notifications for this site in your browser settings, then reload the page.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-between bg-[#faf8f5] rounded-xl px-4 py-3">
+      <div>
+        <p className="text-sm font-semibold">
+          {status === "subscribed" ? "✅ Notifications enabled" : "Notifications off"}
+        </p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          {status === "subscribed"
+            ? "You'll receive reminders & check-in alerts on this device"
+            : "Enable to get reminders & check-in alerts on this device"}
+        </p>
+      </div>
+      <button
+        onClick={status === "subscribed" ? unsubscribe : subscribe}
+        disabled={status === "loading"}
+        className={cn(
+          "relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none disabled:opacity-50",
+          status === "subscribed" ? "bg-emerald-500" : "bg-gray-200"
+        )}
+      >
+        <span
+          className={cn(
+            "inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform duration-200",
+            status === "subscribed" ? "translate-x-6" : "translate-x-1"
+          )}
+        />
+      </button>
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const { user, refresh, logout } = useAuth();
@@ -322,6 +377,21 @@ export default function SettingsPage() {
             {savingBio ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Saving…</> : "Save Changes"}
           </Button>
         </div>
+      </div>
+
+      {/* ── Push Notifications ────────────────────────────────────────────────── */}
+      <div className="planner-card mb-6 space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shrink-0">
+            <Bell size={16} className="text-white" />
+          </div>
+          <div>
+            <h3 className="font-bold text-base">Push Notifications</h3>
+            <p className="text-xs text-muted-foreground">Get reminded on your phone even when the app is closed</p>
+          </div>
+        </div>
+
+        <PushNotificationToggle />
       </div>
 
       {/* ── Password card ─────────────────────────────────────────────────────── */}

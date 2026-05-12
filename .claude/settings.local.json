@@ -77,7 +77,8 @@
       "mcp__Claude_in_Chrome__tabs_context_mcp",
       "WebSearch",
       "WebFetch(domain:railway.com)",
-      "WebFetch(domain:base44.com)"
+      "WebFetch(domain:base44.com)",
+      "Bash(npm install *)"
     ]
   }
 }

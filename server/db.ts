@@ -54,7 +54,7 @@ let _pool: mysql.Pool | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _db: any = null;
 
-function getPool(): mysql.Pool | null {
+export function getPool(): mysql.Pool | null {
   if (!_pool && process.env.DATABASE_URL) {
     try {
       _pool = mysql.createPool({
@@ -131,6 +131,13 @@ export async function ensureSchema(): Promise<void> {
         column: "onboardingCompleted",
         ddl: "ALTER TABLE `users` ADD COLUMN `onboardingCompleted` BOOLEAN NOT NULL DEFAULT FALSE",
       },
+      { table: "users", column: "role", ddl: "ALTER TABLE `users` ADD COLUMN `role` ENUM('member','admin') NOT NULL DEFAULT 'member'" },
+      { table: "community_messages", column: "isDeleted", ddl: "ALTER TABLE `community_messages` ADD COLUMN `isDeleted` TINYINT(1) NOT NULL DEFAULT 0" },
+      { table: "community_messages", column: "deletedByAdmin", ddl: "ALTER TABLE `community_messages` ADD COLUMN `deletedByAdmin` TINYINT(1) NOT NULL DEFAULT 0" },
+      { table: "community_messages", column: "reactions", ddl: "ALTER TABLE `community_messages` ADD COLUMN `reactions` JSON" },
+      { table: "community_messages", column: "flagCount", ddl: "ALTER TABLE `community_messages` ADD COLUMN `flagCount` INT NOT NULL DEFAULT 0" },
+      { table: "annual_plans", column: "visionBoardPinterest", ddl: "ALTER TABLE `annual_plans` ADD COLUMN `visionBoardPinterest` TEXT" },
+      { table: "annual_plans", column: "visionBoardCoverUrl", ddl: "ALTER TABLE `annual_plans` ADD COLUMN `visionBoardCoverUrl` TEXT" },
     ];
 
     // Create community tables if they don't exist
@@ -154,6 +161,20 @@ export async function ensureSchema(): Promise<void> {
         \`content\` VARCHAR(1000) NOT NULL,
         \`createdAt\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
         INDEX \`idx_createdAt\` (\`createdAt\`)
+      )
+    `);
+
+    // Push subscriptions table
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`push_subscriptions\` (
+        \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\` INT NOT NULL,
+        \`endpoint\` TEXT NOT NULL,
+        \`p256dh\` TEXT NOT NULL,
+        \`auth\` TEXT NOT NULL,
+        \`createdAt\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        UNIQUE KEY \`uq_endpoint\` (\`endpoint\`(255)),
+        INDEX \`idx_userId\` (\`userId\`)
       )
     `);
 
@@ -1201,6 +1222,82 @@ export async function globalSearch(userId: number, query: string): Promise<Searc
         meta: `${r.date}${r.timeSlot ? " at " + r.timeSlot : ""}`,
         navPath: r.date ? `/weekly/${new Date(r.date).getFullYear()}/${getISOWeekOfDate(r.date)}` : undefined,
       }))),
+
+    // ── Annual plan text fields ────────────────────────────────────────────────
+    db.select().from(annualPlans)
+      .where(and(
+        eq(annualPlans.userId, userId),
+        or(
+          like(annualPlans.missionStatement, `%${q}%`),
+          like(annualPlans.elevatorPitch, `%${q}%`),
+          like(annualPlans.contractBe, `%${q}%`),
+          like(annualPlans.contractDo, `%${q}%`),
+          like(annualPlans.contractBecome, `%${q}%`),
+          like(annualPlans.professional, `%${q}%`),
+          like(annualPlans.wellness, `%${q}%`),
+          like(annualPlans.learning, `%${q}%`),
+          like(annualPlans.finance, `%${q}%`),
+          like(annualPlans.relationships, `%${q}%`),
+          like(annualPlans.creativity, `%${q}%`),
+        )
+      ))
+      .limit(5)
+      .then(rows => rows.forEach(a => {
+        const excerpt = [
+          a.missionStatement, a.elevatorPitch, a.contractBe, a.contractDo,
+          a.professional, a.wellness, a.learning,
+        ].find(f => f?.toLowerCase().includes(q.toLowerCase()));
+        results.push({
+          id: `annual-${a.id}`,
+          type: "annual",
+          title: `Annual Plan ${a.year}`,
+          excerpt: excerpt?.slice(0, 120),
+          meta: `${a.year}`,
+          navPath: "/annual",
+        });
+      })),
+
+    // ── Weekly plan text fields ───────────────────────────────────────────────
+    db.select().from(weeklyPlans)
+      .where(and(
+        eq(weeklyPlans.userId, userId),
+        or(
+          like(weeklyPlans.wordOfWeek, `%${q}%`),
+          like(weeklyPlans.affirmation, `%${q}%`),
+          like(weeklyPlans.winsOfWeek, `%${q}%`),
+          like(weeklyPlans.weekIntentions, `%${q}%`),
+          like(weeklyPlans.topBusinessGoals, `%${q}%`),
+          like(weeklyPlans.notes, `%${q}%`),
+        )
+      ))
+      .limit(8)
+      .then(rows => rows.forEach(w => {
+        const excerpt = [w.winsOfWeek, w.weekIntentions, w.affirmation, w.notes, w.wordOfWeek]
+          .find(f => f?.toLowerCase().includes(q.toLowerCase()));
+        results.push({
+          id: `weekly-${w.id}`,
+          type: "weekly",
+          title: `Week ${w.weekNumber}, ${w.year}`,
+          excerpt: excerpt?.slice(0, 120),
+          meta: `${w.weekStartDate}`,
+          navPath: `/weekly/${w.year}/${w.weekNumber}`,
+        });
+      })),
+
+    // ── Vision board image captions ───────────────────────────────────────────
+    db.select().from(visionBoardImages)
+      .where(and(
+        eq(visionBoardImages.userId, userId),
+        like(visionBoardImages.caption, `%${q}%`)
+      ))
+      .limit(6)
+      .then(rows => rows.forEach(v => results.push({
+        id: `vb-${v.id}`,
+        type: "visionboard",
+        title: v.caption || "Vision Board Image",
+        excerpt: `Year ${v.year} Vision Board`,
+        navPath: "/annual",
+      }))),
   ]);
 
   return results;
@@ -1293,24 +1390,25 @@ export async function getTodayLeaderboard(date: string): Promise<Array<{
   rating: number;
   note: string | null;
   streak: number;
-  createdAt: Date;
+  totalCheckIns: number;
+  checkedInAt: Date;
 }>> {
   const pool = getPool();
   if (!pool) return [];
   const conn = await pool.getConnection();
   try {
+    // Rolling 24-hour window — entries stay visible for a full day
     const [rows] = await conn.query(
-      `SELECT c.userId, c.rating, c.note, c.createdAt, u.name, u.avatarUrl
+      `SELECT c.userId, c.rating, c.note, c.createdAt, c.date, u.name, u.avatarUrl
        FROM \`daily_check_ins\` c
        JOIN \`users\` u ON u.id = c.userId
-       WHERE c.date = ?
-       ORDER BY c.rating DESC, c.createdAt ASC`,
-      [date]
+       WHERE c.createdAt >= NOW() - INTERVAL 24 HOUR
+       ORDER BY c.rating DESC, c.createdAt ASC`
     );
     const entries = rows as any[];
-    // Calculate streaks for each user
     const result = await Promise.all(entries.map(async (row: any) => {
-      const streak = await getUserCheckInStreak(row.userId, date);
+      const streak = await getUserCheckInStreak(row.userId, row.date);
+      const totalCheckIns = await getUserTotalCheckIns(row.userId);
       return {
         userId: row.userId,
         firstName: (row.name as string || "Friend").split(" ")[0],
@@ -1318,7 +1416,8 @@ export async function getTodayLeaderboard(date: string): Promise<Array<{
         rating: row.rating as number,
         note: (row.note as string | null) ?? null,
         streak,
-        createdAt: row.createdAt as Date,
+        totalCheckIns,
+        checkedInAt: row.createdAt as Date,
       };
     }));
     return result;
@@ -1327,34 +1426,62 @@ export async function getTodayLeaderboard(date: string): Promise<Array<{
   }
 }
 
-export async function getCommunityMessages(limit = 50): Promise<Array<{
+export async function getCommunityMessages(opts: { beforeId?: number; limit?: number } = {}): Promise<Array<{
   id: number;
   userId: number;
   firstName: string;
   avatarUrl: string | null;
   content: string;
+  isDeleted: boolean;
+  deletedByAdmin: boolean;
+  reactions: Record<string, number[]>;
+  flagCount: number;
   createdAt: Date;
 }>> {
   const pool = getPool();
   if (!pool) return [];
   const conn = await pool.getConnection();
+  const limit = opts.limit ?? 50;
   try {
-    const [rows] = await conn.query(
-      `SELECT m.id, m.userId, m.content, m.createdAt, u.name, u.avatarUrl
-       FROM \`community_messages\` m
-       JOIN \`users\` u ON u.id = m.userId
-       ORDER BY m.createdAt DESC
-       LIMIT ?`,
-      [limit]
-    );
-    return (rows as any[]).reverse().map((row: any) => ({
-      id: row.id as number,
-      userId: row.userId as number,
-      firstName: (row.name as string || "Friend").split(" ")[0],
-      avatarUrl: (row.avatarUrl as string | null) ?? null,
-      content: row.content as string,
-      createdAt: row.createdAt as Date,
-    }));
+    let query: string;
+    let params: any[];
+    if (opts.beforeId) {
+      query = `SELECT m.id, m.userId, m.content, m.isDeleted, m.deletedByAdmin, m.reactions, m.flagCount, m.createdAt, u.name, u.avatarUrl
+               FROM \`community_messages\` m
+               JOIN \`users\` u ON u.id = m.userId
+               WHERE m.id < ?
+               ORDER BY m.createdAt DESC
+               LIMIT ?`;
+      params = [opts.beforeId, limit];
+    } else {
+      query = `SELECT m.id, m.userId, m.content, m.isDeleted, m.deletedByAdmin, m.reactions, m.flagCount, m.createdAt, u.name, u.avatarUrl
+               FROM \`community_messages\` m
+               JOIN \`users\` u ON u.id = m.userId
+               ORDER BY m.createdAt DESC
+               LIMIT ?`;
+      params = [limit];
+    }
+    const [rows] = await conn.query(query, params);
+    return (rows as any[]).reverse().map((row: any) => {
+      let reactions: Record<string, number[]> = {};
+      try {
+        if (row.reactions) {
+          reactions = typeof row.reactions === "string" ? JSON.parse(row.reactions) : row.reactions;
+        }
+      } catch { reactions = {}; }
+      return {
+        id: row.id as number,
+        userId: row.userId as number,
+        firstName: (row.name as string || "Friend").split(" ")[0],
+        avatarUrl: (row.avatarUrl as string | null) ?? null,
+        content: row.content as string,
+        isDeleted: !!(row.isDeleted),
+        deletedByAdmin: !!(row.deletedByAdmin),
+        reactions,
+        flagCount: (row.flagCount as number) ?? 0,
+        createdAt: row.createdAt as Date,
+      };
+    });
   } finally {
     conn.release();
   }
@@ -1380,9 +1507,178 @@ export async function deleteCommunityMessage(messageId: number, userId: number):
   const conn = await pool.getConnection();
   try {
     await conn.query(
-      `DELETE FROM \`community_messages\` WHERE id = ? AND userId = ?`,
+      `UPDATE \`community_messages\` SET isDeleted = 1 WHERE id = ? AND userId = ?`,
       [messageId, userId]
     );
+  } finally {
+    conn.release();
+  }
+}
+
+export async function adminDeleteCommunityMessage(messageId: number): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `UPDATE \`community_messages\` SET isDeleted = 1, deletedByAdmin = 1 WHERE id = ?`,
+      [messageId]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+export async function toggleMessageReaction(messageId: number, userId: number, emoji: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT reactions FROM \`community_messages\` WHERE id = ? LIMIT 1`,
+      [messageId]
+    );
+    const row = (rows as any[])[0];
+    if (!row) return;
+    let reactions: Record<string, number[]> = {};
+    try {
+      if (row.reactions) {
+        reactions = typeof row.reactions === "string" ? JSON.parse(row.reactions) : row.reactions;
+      }
+    } catch { reactions = {}; }
+    if (!reactions[emoji]) reactions[emoji] = [];
+    const idx = reactions[emoji].indexOf(userId);
+    if (idx >= 0) {
+      reactions[emoji].splice(idx, 1);
+      if (reactions[emoji].length === 0) delete reactions[emoji];
+    } else {
+      reactions[emoji].push(userId);
+    }
+    await conn.query(
+      `UPDATE \`community_messages\` SET reactions = ? WHERE id = ?`,
+      [JSON.stringify(reactions), messageId]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+export async function flagCommunityMessage(messageId: number): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `UPDATE \`community_messages\` SET flagCount = flagCount + 1 WHERE id = ?`,
+      [messageId]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+export async function isUserAdmin(userId: number): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT role FROM \`users\` WHERE id = ? LIMIT 1`,
+      [userId]
+    );
+    const row = (rows as any[])[0];
+    return row?.role === "admin";
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getUserTotalCheckIns(userId: number): Promise<number> {
+  const pool = getPool();
+  if (!pool) return 0;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) as cnt FROM \`daily_check_ins\` WHERE userId = ?`,
+      [userId]
+    );
+    return (rows as any[])[0]?.cnt ?? 0;
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── Push Notification Subscriptions ─────────────────────────────────────────
+
+export async function savePushSubscription(
+  userId: number,
+  endpoint: string,
+  p256dh: string,
+  auth: string
+): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    // Upsert — endpoint is unique per browser/device
+    await conn.query(
+      `INSERT INTO \`push_subscriptions\` (userId, endpoint, p256dh, auth)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE p256dh = VALUES(p256dh), auth = VALUES(auth), userId = VALUES(userId)`,
+      [userId, endpoint, p256dh, auth]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+export async function deletePushSubscription(userId: number, endpoint: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `DELETE FROM \`push_subscriptions\` WHERE userId = ? AND endpoint = ?`,
+      [userId, endpoint]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getUserPushSubscriptions(userId: number): Promise<Array<{
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}>> {
+  const pool = getPool();
+  if (!pool) return [];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT endpoint, p256dh, auth FROM \`push_subscriptions\` WHERE userId = ?`,
+      [userId]
+    );
+    return rows as any[];
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getAllPushSubscriptionsForReminders(): Promise<Array<{
+  userId: number;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}>> {
+  const pool = getPool();
+  if (!pool) return [];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT userId, endpoint, p256dh, auth FROM \`push_subscriptions\``
+    );
+    return rows as any[];
   } finally {
     conn.release();
   }

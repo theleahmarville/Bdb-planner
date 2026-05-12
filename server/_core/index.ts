@@ -17,6 +17,7 @@ import { createContext } from "./context";
 // bundles vite / vite-plugins into the production output
 
 import { getDb, ensureSchema } from "../db";
+import webpush from "web-push";
 import { LOCAL_UPLOADS_DIR } from "../storage";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -96,6 +97,18 @@ async function startServer() {
 
   // Ensure schema columns exist (safe, idempotent — runs in all environments)
   await ensureSchema();
+
+  // ── Web Push (VAPID) setup ─────────────────────────────────────────────────
+  if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+    webpush.setVapidDetails(
+      `mailto:${process.env.VAPID_EMAIL || "admin@bedobecome.app"}`,
+      process.env.VAPID_PUBLIC_KEY,
+      process.env.VAPID_PRIVATE_KEY
+    );
+    console.log("✅ Web Push (VAPID) configured");
+  } else {
+    console.warn("⚠️  VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY not set — push notifications disabled");
+  }
 
   const app = express();
   const server = createServer(app);
@@ -221,26 +234,78 @@ async function startServer() {
 
 startServer().catch(console.error);
 
-// ─── Slack Reminder Cron (every 15 minutes) ──────────────────────────────────
+// ─── Helper: send push to a single subscription ───────────────────────────────
+async function sendPush(
+  sub: { endpoint: string; p256dh: string; auth: string },
+  payload: object
+): Promise<boolean> {
+  try {
+    await webpush.sendNotification(
+      { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+      JSON.stringify(payload)
+    );
+    return true;
+  } catch (err: any) {
+    // 410 Gone = subscription expired/revoked — clean it up
+    if (err?.statusCode === 410 || err?.statusCode === 404) {
+      try {
+        const pool = (await import("../db")).getPool?.() as any;
+        if (pool) {
+          const conn = await pool.getConnection();
+          await conn.query(`DELETE FROM \`push_subscriptions\` WHERE endpoint = ?`, [sub.endpoint]);
+          conn.release();
+        }
+      } catch { /* ignore cleanup error */ }
+    }
+    return false;
+  }
+}
+
+// ─── Reminder Cron (every 15 minutes) ────────────────────────────────────────
 cron.schedule("*/15 * * * *", async () => {
   try {
-    const { getUnsentReminders, markReminderSent, getUserIntegrations } = await import("../db");
+    const { getUnsentReminders, markReminderSent, getUserIntegrations, getUserPushSubscriptions } = await import("../db");
     const { default: axios } = await import("axios");
+
     const unsent = await getUnsentReminders();
+
     for (const reminder of unsent) {
-      if (!reminder.notifySlack) continue;
-      try {
-        const integration = await getUserIntegrations(reminder.userId);
-        if (!integration?.slackWebhookUrl) continue;
-        await axios.post(integration.slackWebhookUrl, {
-          text: `⏰ *BDB Reminder* — ${reminder.title}\n_Scheduled for ${reminder.date} at ${reminder.timeSlot ?? ""}_ `,
-        });
-        await markReminderSent(reminder.id);
-      } catch (err) {
-        console.error(`[Slack Cron] Failed to send reminder ${reminder.id}:`, err);
+      // ── Slack notification ──────────────────────────────────────────────────
+      if (reminder.notifySlack) {
+        try {
+          const integration = await getUserIntegrations(reminder.userId);
+          if (integration?.slackWebhookUrl) {
+            await axios.post(integration.slackWebhookUrl, {
+              text: `⏰ *BDB Reminder* — ${reminder.title}\n_Scheduled for ${reminder.date} at ${reminder.timeSlot ?? ""}_`,
+            });
+          }
+        } catch (err) {
+          console.error(`[Slack Cron] Failed to send reminder ${reminder.id}:`, err);
+        }
       }
+
+      // ── Web Push notification ───────────────────────────────────────────────
+      if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+        try {
+          const subs = await getUserPushSubscriptions(reminder.userId);
+          const payload = {
+            title: `⏰ ${reminder.title}`,
+            body: reminder.timeSlot
+              ? `Scheduled for ${reminder.date} at ${reminder.timeSlot}`
+              : `Scheduled for ${reminder.date}`,
+            tag: `reminder-${reminder.id}`,
+            url: "/",
+            requireInteraction: true,
+          };
+          await Promise.all(subs.map((sub) => sendPush(sub, payload)));
+        } catch (err) {
+          console.error(`[Push Cron] Failed to send push for reminder ${reminder.id}:`, err);
+        }
+      }
+
+      await markReminderSent(reminder.id);
     }
   } catch (err) {
-    console.error("[Slack Cron] Error checking reminders:", err);
+    console.error("[Reminder Cron] Error:", err);
   }
 });
