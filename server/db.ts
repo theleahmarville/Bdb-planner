@@ -138,6 +138,15 @@ export async function ensureSchema(): Promise<void> {
       { table: "community_messages", column: "flagCount", ddl: "ALTER TABLE `community_messages` ADD COLUMN `flagCount` INT NOT NULL DEFAULT 0" },
       { table: "annual_plans", column: "visionBoardPinterest", ddl: "ALTER TABLE `annual_plans` ADD COLUMN `visionBoardPinterest` TEXT" },
       { table: "annual_plans", column: "visionBoardCoverUrl", ddl: "ALTER TABLE `annual_plans` ADD COLUMN `visionBoardCoverUrl` TEXT" },
+      { table: "social_accounts", column: "lastPostLikes", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `lastPostLikes` INT DEFAULT NULL" },
+      { table: "social_accounts", column: "lastPostComments", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `lastPostComments` INT DEFAULT NULL" },
+      { table: "social_accounts", column: "lastPostReach", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `lastPostReach` INT DEFAULT NULL" },
+      { table: "social_accounts", column: "lastPostDate", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `lastPostDate` VARCHAR(10) DEFAULT NULL" },
+      { table: "social_accounts", column: "avgLikes", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `avgLikes` INT DEFAULT NULL" },
+      { table: "social_accounts", column: "avgReach", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `avgReach` INT DEFAULT NULL" },
+      { table: "social_accounts", column: "engagementRate", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `engagementRate` DECIMAL(5,2) DEFAULT NULL" },
+      { table: "social_accounts", column: "contentNiche", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `contentNiche` VARCHAR(100) DEFAULT NULL" },
+      { table: "social_accounts", column: "contentGoal", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `contentGoal` VARCHAR(200) DEFAULT NULL" },
     ];
 
     // Create community tables if they don't exist
@@ -764,37 +773,53 @@ export async function upsertSocialAccount(
     displayName?: string;
     followerCount?: number;
     connected?: boolean;
+    lastPostLikes?: number;
+    lastPostComments?: number;
+    lastPostReach?: number;
+    lastPostDate?: string;
+    avgLikes?: number;
+    avgReach?: number;
+    engagementRate?: number;
+    contentNiche?: string;
+    contentGoal?: string;
   }
 ) {
   const db = await getDb();
   if (!db) throw new Error("DB not available");
-  // Check if exists
   const existing = await db
     .select()
     .from(socialAccounts)
     .where(and(eq(socialAccounts.userId, userId), eq(socialAccounts.platform, data.platform)))
     .limit(1);
 
+  const fields: Record<string, any> = {
+    handle: data.handle,
+    profileUrl: data.profileUrl,
+    displayName: data.displayName,
+    followerCount: data.followerCount,
+    connected: data.connected ?? true,
+  };
+  // Only include new analytic fields if provided (avoid overwriting with undefined)
+  if (data.lastPostLikes !== undefined) fields.lastPostLikes = data.lastPostLikes;
+  if (data.lastPostComments !== undefined) fields.lastPostComments = data.lastPostComments;
+  if (data.lastPostReach !== undefined) fields.lastPostReach = data.lastPostReach;
+  if (data.lastPostDate !== undefined) fields.lastPostDate = data.lastPostDate;
+  if (data.avgLikes !== undefined) fields.avgLikes = data.avgLikes;
+  if (data.avgReach !== undefined) fields.avgReach = data.avgReach;
+  if (data.engagementRate !== undefined) fields.engagementRate = data.engagementRate;
+  if (data.contentNiche !== undefined) fields.contentNiche = data.contentNiche;
+  if (data.contentGoal !== undefined) fields.contentGoal = data.contentGoal;
+
   if (existing.length > 0) {
     await db
       .update(socialAccounts)
-      .set({
-        handle: data.handle,
-        profileUrl: data.profileUrl,
-        displayName: data.displayName,
-        followerCount: data.followerCount,
-        connected: data.connected ?? true,
-      })
+      .set(fields)
       .where(and(eq(socialAccounts.userId, userId), eq(socialAccounts.platform, data.platform)));
   } else {
     await db.insert(socialAccounts).values({
       userId,
       platform: data.platform,
-      handle: data.handle,
-      profileUrl: data.profileUrl,
-      displayName: data.displayName,
-      followerCount: data.followerCount,
-      connected: data.connected ?? true,
+      ...fields,
     });
   }
 }

@@ -848,7 +848,7 @@ export default function WeeklyPage() {
             </div>
           </div>
           <div className="mt-4 space-y-3">
-            <SocialAccountsPanel />
+            <SocialAccountsPanel weeklyPosts={weekLocal.socialPosts as Record<string, string> | undefined} />
           </div>
         </TabsContent>
 

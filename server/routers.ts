@@ -513,6 +513,15 @@ const socialAccountsRouter = router({
       displayName: z.string().optional(),
       followerCount: z.number().optional(),
       connected: z.boolean().optional(),
+      lastPostLikes: z.number().optional(),
+      lastPostComments: z.number().optional(),
+      lastPostReach: z.number().optional(),
+      lastPostDate: z.string().optional(),
+      avgLikes: z.number().optional(),
+      avgReach: z.number().optional(),
+      engagementRate: z.number().optional(),
+      contentNiche: z.string().optional(),
+      contentGoal: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       await upsertSocialAccount(ctx.user.id, input);
@@ -524,6 +533,68 @@ const socialAccountsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await deleteSocialAccount(ctx.user.id, input.platform);
       return { success: true };
+    }),
+
+  getContentStrategy: protectedProcedure
+    .input(z.object({
+      weeklyPosts: z.record(z.string()).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const accounts = await getSocialAccounts(ctx.user.id);
+      const connected = accounts.filter((a: any) => a.connected);
+      if (connected.length === 0) {
+        return { strategy: "Connect at least one social media account first, then come back for your strategy!" };
+      }
+
+      const { invokeLLM } = await import("./_core/llm");
+
+      const accountSummary = connected.map((a: any) => {
+        const lines = [`${a.platform.toUpperCase()} (${a.handle || a.profileUrl || "linked"})`];
+        if (a.followerCount) lines.push(`  Followers: ${a.followerCount.toLocaleString()}`);
+        if (a.contentNiche) lines.push(`  Niche: ${a.contentNiche}`);
+        if (a.contentGoal) lines.push(`  Goal: ${a.contentGoal}`);
+        if (a.lastPostLikes != null || a.lastPostComments != null) {
+          lines.push(`  Last post: ${a.lastPostLikes ?? "?"} likes, ${a.lastPostComments ?? "?"} comments${a.lastPostReach ? `, ${a.lastPostReach} reach` : ""}`);
+        }
+        if (a.avgLikes != null) lines.push(`  Avg likes per post: ${a.avgLikes}`);
+        if (a.engagementRate != null) lines.push(`  Engagement rate: ${a.engagementRate}%`);
+        if (a.lastPostDate) lines.push(`  Last posted: ${a.lastPostDate}`);
+        return lines.join("\n");
+      }).join("\n\n");
+
+      const postsSummary = input.weeklyPosts
+        ? Object.entries(input.weeklyPosts)
+            .filter(([, v]) => v?.trim())
+            .map(([k, v]) => `- ${k}: ${v}`)
+            .join("\n")
+        : "No posts planned yet this week";
+
+      const prompt = `You are Zion, a sharp social media strategist and wellness coach for the Be Do Become platform.
+
+Here is this creator's social media data:
+
+${accountSummary}
+
+Their planned posts this week:
+${postsSummary}
+
+Based on this data, give a focused, personalised content strategy recommendation. Include:
+1. What type of content is working best for them (based on engagement patterns)
+2. The single best platform to prioritise this week and why
+3. 2-3 specific post ideas tailored to their niche and goals
+4. The best time/frequency to post for maximum reach
+5. One growth action they can take this week
+
+Be direct, specific, and encouraging. Keep it under 300 words. Use their actual numbers when making points. No generic advice — speak directly to their data.`;
+
+      const response = await invokeLLM({
+        messages: [{ role: "user", content: prompt }],
+        maxTokens: 500,
+      });
+
+      return {
+        strategy: String(response.choices[0]?.message?.content || "").trim(),
+      };
     }),
 });
 
