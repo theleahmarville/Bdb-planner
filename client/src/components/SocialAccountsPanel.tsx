@@ -163,18 +163,22 @@ export default function SocialAccountsPanel({ weeklyPosts }: Props = {}) {
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    {/* Open profile link */}
-                    {acc.profileUrl && (
-                      <a
-                        href={acc.profileUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="h-8 px-2.5 rounded-lg border border-border flex items-center gap-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors"
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                        Open Profile
-                      </a>
-                    )}
+                    {/* Open profile link — build URL from handle if profileUrl not stored */}
+                    {(() => {
+                      const url = acc.profileUrl ||
+                        (acc.handle ? `${platform.urlPrefix}${(acc.handle as string).replace(/^@/, "")}` : null);
+                      return url ? (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="h-8 px-2.5 rounded-lg border border-border flex items-center gap-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          Open {platform.label}
+                        </a>
+                      ) : null;
+                    })()}
                     <button
                       onClick={() => startEdit(acc.platform)}
                       className="h-8 w-8 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"

@@ -1442,22 +1442,37 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
 
         // ── Social Post → weekly_plans socialPosts ───────────────────────────
         case 'social_post': {
-          const DAY_KEYS: Record<string, string> = {
-            monday: 'mon', tuesday: 'tue', wednesday: 'wed', thursday: 'thu',
-            friday: 'fri', saturday: 'sat', sunday: 'sun',
-            mon: 'mon', tue: 'tue', wed: 'wed', thu: 'thu',
-            fri: 'fri', sat: 'sat', sun: 'sun',
+          // Map day name → 0-based index (Mon=0 … Sun=6) matching the planner grid key format
+          const DAY_IDX: Record<string, number> = {
+            monday: 0, tuesday: 1, wednesday: 2, thursday: 3, friday: 4, saturday: 5, sunday: 6,
+            mon: 0, tue: 1, wed: 2, thu: 3, fri: 4, sat: 5, sun: 6,
           };
-          const dayKey = DAY_KEYS[(input.day ?? 'monday').toLowerCase()] ?? 'mon';
+          const dayIdx = DAY_IDX[(input.day ?? 'monday').toLowerCase()] ?? 0;
+
+          // Normalise platform to one of the known keys used by SOCIAL_PLATFORMS
+          const PLATFORM_KEYS = ['facebook', 'instagram', 'twitter', 'tiktok', 'threads', 'pinterest', 'youtube', 'linkedin'];
+          const rawPlatform = (input.platform ?? 'instagram').toLowerCase();
+          const platformKey = PLATFORM_KEYS.find(k => rawPlatform.includes(k) || k.includes(rawPlatform)) ?? 'instagram';
+
+          // Key format used by the WeeklyPage social posts grid: e.g. "instagram_0", "tiktok_2"
+          const postKey = `${platformKey}_${dayIdx}`;
+
           const existing = await getWeeklyPlan(userId, year, weekNumber);
           const posts: Record<string, string> = (existing?.socialPosts as any) ?? {};
-          const currentPost = posts[dayKey] ?? '';
-          const platformLabel = input.platform ? `[${input.platform}] ` : '';
-          posts[dayKey] = currentPost
-            ? `${currentPost}\n${platformLabel}${input.content}`
-            : `${platformLabel}${input.content}`;
+          const currentPost = posts[postKey] ?? '';
+          posts[postKey] = currentPost
+            ? `${currentPost}\n${input.content}`
+            : input.content;
           await upsertWeeklyPlan(userId, year, weekNumber, weekStartDate, { socialPosts: posts });
-          return { success: true, target: `Social Posts — ${dayKey} (Week ${weekNumber})`, navPath: `/weekly/${year}/${weekNumber}` };
+
+          const dayName = input.day ?? 'Monday';
+          const platformLabel = platformKey.charAt(0).toUpperCase() + platformKey.slice(1);
+          // navPath includes ?tab=social so WeeklyPage opens on the correct tab
+          return {
+            success: true,
+            target: `Social Posts — ${platformLabel} · ${dayName}`,
+            navPath: `/weekly/${year}/${weekNumber}?tab=social`,
+          };
         }
 
         // ── Gratitude → daily_entries gratitude array ────────────────────────

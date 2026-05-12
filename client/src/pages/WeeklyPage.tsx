@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { useParams } from "wouter";
+import { useParams, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
@@ -63,6 +63,16 @@ export default function WeeklyPage() {
   const nextWeek = weekNumber >= 52 ? { y: year + 1, w: 1 } : { y: year, w: weekNumber + 1 };
 
   const { isAuthenticated } = useAuth();
+  const search = useSearch();
+  // Read ?tab= from URL so Zion deep-links open the right tab (e.g. ?tab=social)
+  const initialTab = new URLSearchParams(search).get("tab") ?? "schedule";
+  const [activeTab, setActiveTab] = useState(initialTab);
+  // Re-sync if URL changes (e.g. navigating from Zion multiple times)
+  useEffect(() => {
+    const t = new URLSearchParams(search).get("tab");
+    if (t) setActiveTab(t);
+  }, [search]);
+
   const { data: weekData } = trpc.weekly.get.useQuery({ year, weekNumber });
   const { data: dailyDataArr } = trpc.daily.get.useQuery({ date: weekStartDate });
   const saveMutation = trpc.weekly.save.useMutation();
@@ -324,7 +334,7 @@ export default function WeeklyPage() {
         <SaveIndicator status={saveStatus} />
       </div>
 
-      <Tabs defaultValue="schedule">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="tabs-scroll mb-4">
         <TabsList className="flex flex-nowrap md:flex-wrap gap-1 h-auto bg-muted p-1 rounded-xl w-max md:w-full">
           {[
