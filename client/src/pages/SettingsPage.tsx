@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import {
-  Eye, EyeOff, User, Lock, LogOut, Camera, Globe, Clock, Loader2, X, Bell,
+  Eye, EyeOff, User, Lock, LogOut, Camera, Globe, Clock, Loader2, X, Bell, Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
@@ -190,6 +190,37 @@ export default function SettingsPage() {
     }
   };
 
+  // ── Email change form ──────────────────────────────────────────────────────
+  const [newEmail, setNewEmail] = useState("");
+  const [emailPassword, setEmailPassword] = useState("");
+  const [showEmailPassword, setShowEmailPassword] = useState(false);
+  const [savingEmail, setSavingEmail] = useState(false);
+
+  const handleChangeEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEmail.trim()) { toast.error("Please enter a new email address"); return; }
+    if (!emailPassword) { toast.error("Please enter your current password"); return; }
+    setSavingEmail(true);
+    try {
+      const res = await fetch("/api/auth/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ newEmail: newEmail.trim(), currentPassword: emailPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error || "Failed to update email"); return; }
+      await refresh();
+      toast.success("Email updated successfully!");
+      setNewEmail("");
+      setEmailPassword("");
+    } catch {
+      toast.error("Network error. Please try again.");
+    } finally {
+      setSavingEmail(false);
+    }
+  };
+
   // ── Password form ──────────────────────────────────────────────────────────
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -308,7 +339,7 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Email (read-only) */}
+          {/* Email (read-only — changed via the card below) */}
           <div className="space-y-2">
             <Label className="font-semibold">Email Address</Label>
             <Input
@@ -316,7 +347,7 @@ export default function SettingsPage() {
               disabled
               className="h-10 bg-muted/50 text-muted-foreground"
             />
-            <p className="text-xs text-muted-foreground">Email cannot be changed at this time.</p>
+            <p className="text-xs text-muted-foreground">To update your email, use the <span className="font-semibold text-emerald-700">Change Email</span> section below.</p>
           </div>
         </div>
       </div>
@@ -377,6 +408,61 @@ export default function SettingsPage() {
             {savingBio ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Saving…</> : "Save Changes"}
           </Button>
         </div>
+      </div>
+
+      {/* ── Change Email card ────────────────────────────────────────────────── */}
+      <div className="planner-card mb-6">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shrink-0">
+            <Mail size={16} className="text-white" />
+          </div>
+          <div>
+            <h2 className="font-bold text-base">Change Email Address</h2>
+            <p className="text-xs text-muted-foreground">Current: <span className="font-medium text-foreground">{user?.email}</span></p>
+          </div>
+        </div>
+
+        <form onSubmit={handleChangeEmail} className="space-y-4">
+          <div className="space-y-2">
+            <Label className="font-semibold">New Email Address</Label>
+            <Input
+              type="email"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              placeholder="you@example.com"
+              className="h-10"
+              required
+              autoComplete="email"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label className="font-semibold">Confirm with Current Password</Label>
+            <div className="relative">
+              <Input
+                type={showEmailPassword ? "text" : "password"}
+                value={emailPassword}
+                onChange={(e) => setEmailPassword(e.target.value)}
+                placeholder="Your current password"
+                className="h-10 pr-10"
+                required
+              />
+              <button type="button" onClick={() => setShowEmailPassword(!showEmailPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
+                {showEmailPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">For security, your password is required to change your email.</p>
+          </div>
+
+          <Button
+            type="submit"
+            disabled={savingEmail || !newEmail.trim() || !emailPassword}
+            className="w-full h-10 bg-amber-600 hover:bg-amber-700 text-white font-semibold"
+          >
+            {savingEmail ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Updating…</> : "Update Email"}
+          </Button>
+        </form>
       </div>
 
       {/* ── Push Notifications ────────────────────────────────────────────────── */}
