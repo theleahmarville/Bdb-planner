@@ -165,25 +165,25 @@ export default function PlannerLayout({
     r => !r.sent && r.date >= now.toISOString().slice(0, 10)
   ).length;
 
-  // devotionPending tracks whether today's devotion is waiting to be shown
-  // It opens after the greeting modal is dismissed (or immediately if greeting already shown)
-  const devotionKey = `devotion-shown-${new Date().toISOString().slice(0, 10)}`;
+  // Devotion opens after the greeting modal is dismissed, once per session
+  // Using sessionStorage (same as greeting) so it reappears every new browser session
+  const devotionSessionKey = `devotion-shown-${user?.id}-${new Date().toISOString().slice(0, 10)}`;
   const greetingAlreadyShown = (userId: number | undefined) =>
     !!sessionStorage.getItem(`greeting-shown-${userId}-${new Date().toISOString().slice(0, 10)}`);
 
   const openDevotionIfDue = () => {
-    if (!localStorage.getItem(devotionKey)) {
+    if (!sessionStorage.getItem(devotionSessionKey)) {
       setDevotionOpen(true);
-      localStorage.setItem(devotionKey, '1');
+      sessionStorage.setItem(devotionSessionKey, '1');
     }
   };
 
   // If greeting was already shown this session, open devotion after a short delay
   useEffect(() => {
-    if (!isAuthenticated) return;
-    if (localStorage.getItem(devotionKey)) return; // devotion already shown today
+    if (!isAuthenticated || !user?.id) return;
+    if (sessionStorage.getItem(devotionSessionKey)) return; // devotion already shown this session
     if (greetingAlreadyShown(user?.id)) {
-      // Greeting already dismissed earlier — open devotion directly
+      // Greeting already dismissed earlier this session — open devotion directly
       const t = setTimeout(() => openDevotionIfDue(), 800);
       return () => clearTimeout(t);
     }

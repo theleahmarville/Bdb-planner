@@ -748,7 +748,13 @@ const zionRouter = router({
     const gender = userRow?.gender ?? 'other';
     const firstName = ctx.user.name?.split(' ')[0] || 'friend';
 
-    const hour = new Date().getHours();
+    // Use user's stored timezone so the greeting matches their local time of day
+    // (Railway server runs in UTC — without this, a user in UTC-4 gets "afternoon" at 8am)
+    const userTimezone = (userRow as any)?.timezone || 'UTC';
+    const hour = parseInt(
+      new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: userTimezone }).format(new Date()),
+      10
+    );
     const timeOfDay = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : hour < 21 ? 'evening' : 'night';
 
     const pronounContext = gender === 'female'
