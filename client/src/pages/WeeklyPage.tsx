@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -27,6 +27,10 @@ import {
   Trash2,
   ExternalLink,
   Bell,
+  TrendingUp,
+  Flame,
+  Target,
+  AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Link } from "wouter";
@@ -236,6 +240,63 @@ export default function WeeklyPage() {
   }
 
   const habitEntries = Object.entries(weekLocal.habitTracker || buildDefaultHabits());
+
+  // ── Habit progress stats (computed for the check-in summary) ───────────────
+  const habitStats = useMemo(() => {
+    if (habitEntries.length === 0) return null;
+
+    // Today's day index (0=Mon … 6=Sun). Clamp to 0–6.
+    const todayDate = new Date();
+    const jsDay = todayDate.getDay(); // 0=Sun
+    const todayIdx = jsDay === 0 ? 6 : jsDay - 1; // convert to Mon-based
+
+    // Check if the current week matches today's week
+    const todayDateStr = format(todayDate, "yyyy-MM-dd");
+    const isCurrentWeek =
+      todayDateStr >= format(weekStart, "yyyy-MM-dd") &&
+      todayDateStr <= format(addDays(weekStart, 6), "yyyy-MM-dd");
+
+    // Overall weekly completion
+    let totalPossible = 0;
+    let totalDone = 0;
+    let todayDone = 0;
+    const totalHabits = habitEntries.length;
+
+    const perHabit = habitEntries.map(([key, habit]: [string, any]) => {
+      const days = habit.days as boolean[];
+      const done = days.filter(Boolean).length;
+      totalDone += done;
+      totalPossible += 7;
+      if (isCurrentWeek) todayDone += days[todayIdx] ? 1 : 0;
+      return { key, name: habit.name as string, done, pct: Math.round((done / 7) * 100) };
+    });
+
+    const overallPct = totalPossible > 0 ? Math.round((totalDone / totalPossible) * 100) : 0;
+
+    // Best and struggling habit
+    const sorted = [...perHabit].sort((a, b) => b.done - a.done);
+    const best = sorted[0];
+    const struggling = sorted[sorted.length - 1];
+
+    // Motivational message based on performance
+    let message = "";
+    let tone: "great" | "good" | "push" | "start" = "start";
+    if (overallPct >= 80) {
+      message = "You're absolutely crushing it this week! Your consistency is building the life you're designing. Keep going — you're in flow. 🔥";
+      tone = "great";
+    } else if (overallPct >= 50) {
+      message = "Solid progress! You're more than halfway there. One focused day can shift your whole week — today is that day.";
+      tone = "good";
+    } else if (overallPct > 0) {
+      message = "Every check means something. Small, steady steps compound into big results — don't quit now. You've already started.";
+      tone = "push";
+    } else {
+      message = "A fresh week, a fresh start. Every habit you tick today is a vote for the person you're becoming. Begin now. ✨";
+      tone = "start";
+    }
+
+    return { overallPct, totalDone, totalPossible, totalHabits, todayDone, isCurrentWeek, todayIdx, best, struggling, message, tone, perHabit };
+  }, [habitEntries, weekStart]);
 
   return (
     <div className="p-4 max-w-full">
@@ -506,6 +567,120 @@ export default function WeeklyPage() {
 
         {/* ── Habits ── */}
         <TabsContent value="habits">
+
+          {/* ── Habit Check-In Progress Summary ────────────────────────────── */}
+          {habitStats && (
+            <div className={cn(
+              "planner-card mb-4 overflow-hidden",
+              habitStats.tone === "great" && "border-emerald-200",
+              habitStats.tone === "good" && "border-sky-200",
+              habitStats.tone === "push" && "border-amber-200",
+              habitStats.tone === "start" && "border-violet-200",
+            )}>
+              {/* Gradient header strip */}
+              <div className={cn(
+                "rounded-xl px-5 py-4 mb-4 flex items-center justify-between gap-4",
+                habitStats.tone === "great" && "bg-gradient-to-r from-emerald-500 to-green-500",
+                habitStats.tone === "good" && "bg-gradient-to-r from-sky-500 to-blue-500",
+                habitStats.tone === "push" && "bg-gradient-to-r from-amber-500 to-orange-500",
+                habitStats.tone === "start" && "bg-gradient-to-r from-violet-500 to-indigo-500",
+              )}>
+                {/* Big percentage */}
+                <div className="text-white">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-white/70 mb-0.5">This Week's Progress</p>
+                  <div className="flex items-end gap-2">
+                    <span className="text-5xl font-black leading-none">{habitStats.overallPct}%</span>
+                    <span className="text-sm font-semibold text-white/80 mb-1">{habitStats.totalDone}/{habitStats.totalPossible} habits</span>
+                  </div>
+                  {/* Wide progress bar */}
+                  <div className="mt-3 h-2 w-full bg-white/25 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-white rounded-full transition-all duration-700"
+                      style={{ width: `${habitStats.overallPct}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Today's ring */}
+                {habitStats.isCurrentWeek && (
+                  <div className="shrink-0 text-center text-white">
+                    <div className="relative w-16 h-16 mx-auto">
+                      <svg className="w-16 h-16 -rotate-90" viewBox="0 0 64 64">
+                        <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="6" />
+                        <circle
+                          cx="32" cy="32" r="26"
+                          fill="none" stroke="white" strokeWidth="6"
+                          strokeDasharray={`${Math.round(2 * Math.PI * 26)}`}
+                          strokeDashoffset={`${Math.round(2 * Math.PI * 26 * (1 - habitStats.todayDone / habitStats.totalHabits))}`}
+                          strokeLinecap="round"
+                          className="transition-all duration-700"
+                        />
+                      </svg>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center">
+                        <span className="text-lg font-black leading-none">{habitStats.todayDone}</span>
+                        <span className="text-[9px] text-white/70 font-semibold">today</span>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-white/70 font-semibold mt-1">of {habitStats.totalHabits} habits</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Stats row */}
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                {/* Best habit */}
+                <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 flex items-start gap-2">
+                  <Flame size={14} className="text-emerald-600 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Strongest</p>
+                    <p className="text-xs font-semibold text-[#2d2520] truncate mt-0.5">{habitStats.best?.name}</p>
+                    <p className="text-[10px] text-emerald-600 font-medium">{habitStats.best?.done}/7 days</p>
+                  </div>
+                </div>
+
+                {/* Overall */}
+                <div className="bg-[#faf8f5] border border-[#e8e0d5] rounded-xl px-3 py-2.5 flex items-start gap-2">
+                  <Target size={14} className="text-[#8a7a6a] shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold text-[#8a7a6a] uppercase tracking-wider">Total Checks</p>
+                    <p className="text-xl font-black text-[#2d2520] leading-tight">{habitStats.totalDone}</p>
+                    <p className="text-[10px] text-[#8a7a6a] font-medium">this week</p>
+                  </div>
+                </div>
+
+                {/* Needs attention */}
+                {habitStats.struggling && habitStats.struggling.done < habitStats.best?.done && (
+                  <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5 flex items-start gap-2">
+                    <AlertCircle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Focus On</p>
+                      <p className="text-xs font-semibold text-[#2d2520] truncate mt-0.5">{habitStats.struggling?.name}</p>
+                      <p className="text-[10px] text-amber-600 font-medium">{habitStats.struggling?.done}/7 days</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Motivational message */}
+              <div className={cn(
+                "rounded-xl px-4 py-3 flex items-start gap-2.5",
+                habitStats.tone === "great" && "bg-emerald-50 border border-emerald-100",
+                habitStats.tone === "good" && "bg-sky-50 border border-sky-100",
+                habitStats.tone === "push" && "bg-amber-50 border border-amber-100",
+                habitStats.tone === "start" && "bg-violet-50 border border-violet-100",
+              )}>
+                <TrendingUp size={14} className={cn(
+                  "shrink-0 mt-0.5",
+                  habitStats.tone === "great" && "text-emerald-600",
+                  habitStats.tone === "good" && "text-sky-600",
+                  habitStats.tone === "push" && "text-amber-600",
+                  habitStats.tone === "start" && "text-violet-600",
+                )} />
+                <p className="text-xs text-[#3d3730] font-medium leading-relaxed">{habitStats.message}</p>
+              </div>
+            </div>
+          )}
+
           <div className="planner-card">
             <div className="flex items-center justify-between mb-4">
               <div className="planner-pill">Daily Habit Tracker</div>
