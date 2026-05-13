@@ -242,13 +242,13 @@ export default function SocialAccountsPanel({ weeklyPosts }: Props = {}) {
                   </div>
                 )}
 
-                {/* No stats prompt */}
+                {/* Optional stats prompt — doesn't block strategy */}
                 {!isEditing && !hasStats && !acc.followerCount && (
                   <button
                     onClick={() => startEdit(acc.platform)}
                     className="w-full text-xs text-muted-foreground border border-dashed border-border rounded-xl px-3 py-2 hover:bg-muted/30 transition-colors flex items-center justify-center gap-1.5"
                   >
-                    <BarChart2 className="w-3 h-3" /> Add your stats to unlock Zion's strategy
+                    <BarChart2 className="w-3 h-3" /> Add follower count &amp; post stats to sharpen Zion's strategy
                   </button>
                 )}
 
@@ -363,7 +363,7 @@ export default function SocialAccountsPanel({ weeklyPosts }: Props = {}) {
 
           {!showStrategy && (
             <p className="text-xs text-muted-foreground bg-[#faf8f5] rounded-xl px-3 py-2.5">
-              Hit "Get Strategy" and Zion will analyse your follower count, engagement rate, and last post performance to tell you exactly what to post next and where to focus this week.
+              Hit <strong>"Get Strategy"</strong> and Zion will give you a personalised content plan — what to post, when to post, and how to grow. Add your stats above to make the advice even sharper.
             </p>
           )}
         </div>

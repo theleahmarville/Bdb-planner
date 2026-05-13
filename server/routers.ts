@@ -569,7 +569,13 @@ const socialAccountsRouter = router({
             .join("\n")
         : "No posts planned yet this week";
 
-      const prompt = `You are Zion, a sharp social media strategist and wellness coach for the Be Do Become platform.
+      // Check if any account actually has stats entered
+      const hasAnyStats = connected.some((a: any) =>
+        a.followerCount || a.lastPostLikes != null || a.engagementRate != null || a.contentNiche || a.contentGoal
+      );
+
+      const prompt = hasAnyStats
+        ? `You are Zion, a sharp social media strategist and wellness coach for the Be Do Become platform.
 
 Here is this creator's social media data:
 
@@ -578,14 +584,31 @@ ${accountSummary}
 Their planned posts this week:
 ${postsSummary}
 
-Based on this data, give a focused, personalised content strategy recommendation. Include:
-1. What type of content is working best for them (based on engagement patterns)
+Based on this data, give a focused, personalised content strategy. Include:
+1. What content type is performing best (reference their actual engagement numbers)
 2. The single best platform to prioritise this week and why
-3. 2-3 specific post ideas tailored to their niche and goals
-4. The best time/frequency to post for maximum reach
-5. One growth action they can take this week
+3. 2-3 specific post ideas tailored to their niche and goal
+4. Best posting frequency and timing for their audience
+5. One concrete growth action for this week
 
-Be direct, specific, and encouraging. Keep it under 300 words. Use their actual numbers when making points. No generic advice — speak directly to their data.`;
+Be direct, specific, encouraging. Under 300 words. Reference their actual numbers. No generic advice.`
+        : `You are Zion, a sharp social media strategist and wellness coach for the Be Do Become platform.
+
+This creator has connected the following social media accounts:
+
+${accountSummary}
+
+Their planned posts this week:
+${postsSummary}
+
+They haven't added their stats yet. Give them a powerful, practical content strategy for their platform(s). Include:
+1. The best content format to lead with on their platform right now (Reels, carousels, Stories, etc.) and why
+2. 3 specific post ideas that would perform well in the wellness/lifestyle/entrepreneurship space
+3. The ideal posting schedule (days and times) for maximum reach on their platform
+4. One immediate growth action they can take this week to attract their ideal audience
+5. What stats to start tracking so Zion can sharpen the strategy next time
+
+Be direct, inspiring, and platform-specific. Under 300 words. Make every word count — this is their roadmap.`;
 
       const response = await invokeLLM({
         messages: [{ role: "user", content: prompt }],
