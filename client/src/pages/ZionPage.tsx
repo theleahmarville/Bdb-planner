@@ -507,18 +507,25 @@ export default function ZionPage() {
       <div className="px-4 pt-3 pb-1 shrink-0">
         <div className="flex gap-1.5 flex-wrap">
           {[
-            { icon: <Target className="w-3 h-3" />, label: "Goals" },
-            { icon: <Bell className="w-3 h-3" />, label: "Reminders" },
-            { icon: <Calendar className="w-3 h-3" />, label: "Calendar" },
-            { icon: <Heart className="w-3 h-3" />, label: "Habits" },
-            { icon: <DollarSign className="w-3 h-3" />, label: "Budget" },
-            { icon: <Share2 className="w-3 h-3" />, label: "Social Posts" },
-            { icon: <BookOpen className="w-3 h-3" />, label: "Notes" },
-            { icon: <Smile className="w-3 h-3" />, label: "Gratitude" },
+            { icon: <Target className="w-3 h-3" />,    label: "Goals",        prompt: "Help me set and review my big goals for this year" },
+            { icon: <Bell className="w-3 h-3" />,       label: "Reminders",    prompt: "Add a reminder for me — " },
+            { icon: <Calendar className="w-3 h-3" />,   label: "Calendar",     prompt: "Add this to my calendar: " },
+            { icon: <Heart className="w-3 h-3" />,      label: "Habits",       prompt: "Help me build a new habit or review my current ones" },
+            { icon: <DollarSign className="w-3 h-3" />, label: "Budget",       prompt: "Help me track my budget — " },
+            { icon: <Share2 className="w-3 h-3" />,     label: "Social Posts", prompt: "Help me plan my social media content for this week" },
+            { icon: <BookOpen className="w-3 h-3" />,   label: "Notes",        prompt: "Save a note for me: " },
+            { icon: <Smile className="w-3 h-3" />,      label: "Gratitude",    prompt: "I'm grateful for " },
           ].map(c => (
-            <span key={c.label} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-white border border-[#e8e0d5] text-[#8a7a6a]">
+            <button
+              key={c.label}
+              onClick={() => {
+                setInput(c.prompt);
+                setTimeout(() => textareaRef.current?.focus(), 50);
+              }}
+              className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-white border border-[#e8e0d5] text-[#8a7a6a] hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors cursor-pointer"
+            >
               {c.icon}{c.label}
-            </span>
+            </button>
           ))}
         </div>
       </div>
