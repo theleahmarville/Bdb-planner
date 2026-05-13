@@ -17,6 +17,14 @@ const TIME_EMOJIS: Record<string, string> = {
   night: "🌙",
 };
 
+/** Returns 'morning' (5–11am), 'evening' (5–8pm), or null (no greeting) */
+function getGreetingSlot(): "morning" | "evening" | null {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 12) return "morning";
+  if (h >= 17 && h < 21) return "evening";
+  return null;
+}
+
 interface GreetingModalProps {
   onDismissed?: () => void;
 }
@@ -26,8 +34,11 @@ export default function GreetingModal({ onDismissed }: GreetingModalProps = {}) 
   const [visible, setVisible] = useState(false);
   const [dismissed, setDismissed] = useState(false);
 
-  // Only show once per session (not once per day, so every login gets a greeting)
-  const sessionKey = `greeting-shown-${user?.id}-${new Date().toISOString().slice(0, 10)}`;
+  // Show once per morning slot AND once per evening slot per day
+  // Using localStorage so it persists across browser sessions (resets next day)
+  const today = new Date().toISOString().slice(0, 10);
+  const slot = getGreetingSlot(); // null during afternoon / late night
+  const storageKey = slot ? `greeting-shown-${user?.id}-${today}-${slot}` : null;
 
   // Pass the browser's local timezone so the server uses the correct time of day
   // (Railway runs in UTC — without this the server would compute the wrong greeting)
@@ -36,24 +47,25 @@ export default function GreetingModal({ onDismissed }: GreetingModalProps = {}) 
   const { data, isLoading } = trpc.zion.dailyGreeting.useQuery(
     { timezone: browserTimezone },
     {
-      enabled: isAuthenticated && !dismissed,
+      enabled: isAuthenticated && !dismissed && !!slot,
       staleTime: Infinity, // don't refetch during session
     }
   );
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    if (sessionStorage.getItem(sessionKey)) return; // already shown today
+    if (!slot || !storageKey) return; // not morning or evening — never show
+    if (localStorage.getItem(storageKey)) return; // already shown for this slot today
     if (data && !dismissed) {
       const t = setTimeout(() => setVisible(true), 800);
       return () => clearTimeout(t);
     }
-  }, [data, isAuthenticated, dismissed, sessionKey]);
+  }, [data, isAuthenticated, dismissed, slot, storageKey]);
 
   const handleDismiss = () => {
     setVisible(false);
     setDismissed(true);
-    sessionStorage.setItem(sessionKey, "1");
+    if (storageKey) localStorage.setItem(storageKey, "1");
     onDismissed?.();
   };
 

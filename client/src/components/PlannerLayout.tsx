@@ -24,6 +24,7 @@ import {
   Users,
   Flame,
   Trophy,
+  Home,
 } from "lucide-react";
 import { MONTHS } from "@/lib/planner";
 import { cn } from "@/lib/utils";
@@ -165,25 +166,35 @@ export default function PlannerLayout({
     r => !r.sent && r.date >= now.toISOString().slice(0, 10)
   ).length;
 
-  // Devotion opens after the greeting modal is dismissed, once per session
-  // Using sessionStorage (same as greeting) so it reappears every new browser session
-  const devotionSessionKey = `devotion-shown-${user?.id}-${new Date().toISOString().slice(0, 10)}`;
-  const greetingAlreadyShown = (userId: number | undefined) =>
-    !!sessionStorage.getItem(`greeting-shown-${userId}-${new Date().toISOString().slice(0, 10)}`);
+  // Devotion (bible verse + affirmation) — once per calendar day, persists across sessions
+  const devotionDayKey = `devotion-shown-${user?.id}-${new Date().toISOString().slice(0, 10)}`;
+
+  /**
+   * Returns true when no greeting is expected right now (either it was already
+   * shown for the current morning/evening slot, or it's afternoon/night where
+   * no greeting fires at all).  In both cases we should open the devotion directly.
+   */
+  const greetingAlreadyShownOrNotDue = (userId: number | undefined): boolean => {
+    const h = new Date().getHours();
+    const slot = h >= 5 && h < 12 ? "morning" : h >= 17 && h < 21 ? "evening" : null;
+    if (!slot) return true; // afternoon/night — greeting never fires, skip to devotion
+    const today = new Date().toISOString().slice(0, 10);
+    return !!localStorage.getItem(`greeting-shown-${userId}-${today}-${slot}`);
+  };
 
   const openDevotionIfDue = () => {
-    if (!sessionStorage.getItem(devotionSessionKey)) {
+    if (!localStorage.getItem(devotionDayKey)) {
       setDevotionOpen(true);
-      sessionStorage.setItem(devotionSessionKey, '1');
+      localStorage.setItem(devotionDayKey, '1');
     }
   };
 
-  // If greeting was already shown this session, open devotion after a short delay
+  // If no greeting is expected (or already shown), open devotion directly after a short delay
   useEffect(() => {
     if (!isAuthenticated || !user?.id) return;
-    if (sessionStorage.getItem(devotionSessionKey)) return; // devotion already shown this session
-    if (greetingAlreadyShown(user?.id)) {
-      // Greeting already dismissed earlier this session — open devotion directly
+    if (localStorage.getItem(devotionDayKey)) return; // devotion already shown today
+    if (greetingAlreadyShownOrNotDue(user?.id)) {
+      // Greeting won't fire — open devotion directly
       const t = setTimeout(() => openDevotionIfDue(), 800);
       return () => clearTimeout(t);
     }
@@ -280,6 +291,16 @@ export default function PlannerLayout({
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-2 py-4 space-y-1">
+
+        {/* Dashboard / Home */}
+        <Link href="/dashboard">
+          <div className={cn("sidebar-nav-item", isDashboard && "active")} title={!sidebarOpen ? "Home" : undefined}>
+            <Home size={18} className="flex-shrink-0" />
+            {sidebarOpen && <span>Home</span>}
+          </div>
+        </Link>
+
+        <div className="border-t border-sidebar-border my-1" />
 
         {/* Annual Planning */}
         <Link href="/annual">
@@ -557,10 +578,10 @@ export default function PlannerLayout({
 
         {/* Mobile Bottom Tab Bar */}
         <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-background border-t border-border flex items-stretch safe-area-inset-bottom">
+          <MobileTabItem href="/dashboard" icon={Home} label="Home" active={isDashboard} />
           <MobileTabItem href="/annual" icon={Star} label="Annual" active={isAnnual || isYearCal} />
           <MobileTabItem href={monthlyHref} icon={CalendarRange} label="Monthly" active={isMonthly} />
           <MobileTabItem href={weeklyHref} icon={CalendarDays} label="Weekly" active={isWeekly} />
-          <MobileTabItem href="/notes" icon={StickyNote} label="Notes" active={isNotes} />
           <button
             onClick={() => setDrawerOpen(true)}
             className={cn(
