@@ -220,6 +220,7 @@ export default function PlannerLayout({
   }, []);
 
   const isAnnual = location === "/" || location.startsWith("/annual");
+  const isDashboard = location === "/dashboard";
   const isYearCal = location.startsWith("/year-calendar");
   const isMonthly = location.startsWith("/monthly");
   const isWeekly = location.startsWith("/weekly");
@@ -229,6 +230,7 @@ export default function PlannerLayout({
   const isCommunity = location === "/community";
 
   const getPageTitle = () => {
+    if (isDashboard) return "Dashboard";
     if (isYearCal) return `${currentYear} Year Calendar`;
     if (isAnnual) return "Annual Planning";
     if (isMonthly) return `Monthly — ${MONTHS[currentMonth - 1]} ${currentYear}`;
@@ -248,7 +250,7 @@ export default function PlannerLayout({
     <>
       {/* Logo / Brand */}
       <div className="flex items-center justify-between px-4 py-4 border-b border-sidebar-border">
-        <div className="flex items-center gap-2 min-w-0">
+        <Link href="/dashboard" className="flex items-center gap-2 min-w-0 hover:opacity-80 transition-opacity cursor-pointer">
           <div className="w-8 h-8 rounded-full bg-sidebar-foreground flex items-center justify-center flex-shrink-0">
             <span className="text-sidebar text-[9px] font-black">BDB</span>
           </div>
@@ -258,7 +260,7 @@ export default function PlannerLayout({
               <p className="text-[10px] text-sidebar-foreground/60 leading-tight truncate">Wellness · Leah Marville</p>
             </div>
           )}
-        </div>
+        </Link>
         <button
           onClick={() => setSidebarOpen(!sidebarOpen)}
           className="hidden md:flex p-1.5 rounded-lg hover:bg-sidebar-accent transition-colors text-sidebar-foreground flex-shrink-0"

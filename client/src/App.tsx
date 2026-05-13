@@ -17,6 +17,7 @@ import SettingsPage from "./pages/SettingsPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import OnboardingPage from "./pages/OnboardingPage";
 import CommunityPage from "./pages/CommunityPage";
+import DashboardPage from "./pages/DashboardPage";
 import PlannerLayout from "./components/PlannerLayout";
 import { useState } from "react";
 import { getISOWeek, getISOWeekYear } from "date-fns";
@@ -37,6 +38,7 @@ function PlannerRouter() {
   if (isOnboarding) return <OnboardingPage />;
   if (isHome) return <Home />;
 
+
   return (
     <PlannerLayout
       currentYear={year}
@@ -47,6 +49,7 @@ function PlannerRouter() {
       onWeekChange={setWeek}
     >
       <Switch>
+        <Route path="/dashboard" component={DashboardPage} />
         <Route path="/annual" component={AnnualPage} />
         <Route path="/monthly/:year/:month" component={MonthlyPage} />
         <Route path="/weekly/:year/:week" component={WeeklyPage} />
