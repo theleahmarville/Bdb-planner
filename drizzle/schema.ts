@@ -60,6 +60,8 @@ export const annualPlans = mysqlTable("annual_plans", {
   vennOverlap: text("vennOverlap"),
   // Vision board
   visionBoardContent: text("visionBoardContent"),
+  visionBoardPinterest: text("visionBoardPinterest"),
+  visionBoardCoverUrl: text("visionBoardCoverUrl"),
   // Personal presentation
   missionStatement: text("missionStatement"),
   elevatorPitch: text("elevatorPitch"),
