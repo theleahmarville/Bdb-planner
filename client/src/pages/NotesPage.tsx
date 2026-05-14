@@ -35,6 +35,22 @@ import { format } from "date-fns";
 
 const DEFAULT_FOLDERS = ["All Notes", "Personal", "Work", "Goals", "Ideas", "Journal"];
 
+// ─── Folder-lock helpers (client-side, SHA-256 stored in localStorage) ────────
+async function hashFolderPassword(password: string): Promise<string> {
+  const data = new TextEncoder().encode("bdb-folder-v1:" + password);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function loadFolderLocks(userId: number): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(`bdb-folder-locks-${userId}`) || "{}"); }
+  catch { return {}; }
+}
+
+function saveFolderLocks(userId: number, locks: Record<string, string>) {
+  localStorage.setItem(`bdb-folder-locks-${userId}`, JSON.stringify(locks));
+}
+
 function formatNoteDate(date: Date | string) {
   const d = new Date(date);
   const now = new Date();
@@ -235,9 +251,147 @@ function LockedNoteOverlay({ onUnlock }: { onUnlock: () => void }) {
   );
 }
 
+// ─── Folder Lock Modal ────────────────────────────────────────────────────────
+function FolderLockModal({
+  folder,
+  mode,
+  onConfirm,
+  onCancel,
+  error,
+}: {
+  folder: string;
+  mode: "set" | "verify" | "remove";
+  onConfirm: (password: string, confirm?: string) => void;
+  onCancel: () => void;
+  error?: string;
+}) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const meta = {
+    set:    { title: `Lock "${folder}" folder`,   desc: "Set a password — you'll need it every time you open this folder.", btn: "Lock Folder" },
+    verify: { title: `"${folder}" is locked`,      desc: "Enter your password to access notes in this folder.",              btn: "Unlock"      },
+    remove: { title: `Remove lock on "${folder}"`, desc: "Enter your current password to permanently remove the lock.",     btn: "Remove Lock" },
+  }[mode];
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (mode === "set" && password !== confirm) return;
+    onConfirm(password, confirm);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-[#faf7f2] rounded-2xl shadow-2xl w-full max-w-sm border border-[#d4cfc6] overflow-hidden">
+        <div className="bg-[#c8a96e] px-6 py-4 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
+            {mode === "verify" ? <LockOpen className="w-5 h-5 text-white" /> : <Lock className="w-5 h-5 text-white" />}
+          </div>
+          <div>
+            <h3 className="text-white font-bold text-base">{meta.title}</h3>
+            <p className="text-white/80 text-xs">{meta.desc}</p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-[#5a5248] uppercase tracking-wider">
+              {mode === "set" ? "New Password" : "Password"}
+            </label>
+            <div className="relative">
+              <input
+                ref={inputRef}
+                type={showPw ? "text" : "password"}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Enter password…"
+                className="w-full px-3 py-2.5 pr-10 rounded-xl border border-[#d4cfc6] bg-white text-[#3d3730] text-sm outline-none focus:border-[#c8a96e] focus:ring-2 focus:ring-[#c8a96e]/20 transition-all"
+                required
+              />
+              <button type="button" onClick={() => setShowPw(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#9a9088] hover:text-[#5a5248]">
+                {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          {mode === "set" && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-[#5a5248] uppercase tracking-wider">Confirm Password</label>
+              <input
+                type={showPw ? "text" : "password"}
+                value={confirm}
+                onChange={e => setConfirm(e.target.value)}
+                placeholder="Confirm password…"
+                className="w-full px-3 py-2.5 rounded-xl border border-[#d4cfc6] bg-white text-[#3d3730] text-sm outline-none focus:border-[#c8a96e] focus:ring-2 focus:ring-[#c8a96e]/20 transition-all"
+                required
+              />
+              {password && confirm && password !== confirm && (
+                <p className="text-xs text-red-500">Passwords do not match</p>
+              )}
+            </div>
+          )}
+
+          {error && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-xl">
+              <X className="w-4 h-4 text-red-500 shrink-0" />
+              <p className="text-xs text-red-600">{error}</p>
+            </div>
+          )}
+
+          {mode === "set" && (
+            <div className="flex items-start gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-emerald-700">
+                The password is stored locally on this device. If you forget it, the lock cannot be removed without the password.
+              </p>
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <Button type="button" variant="outline" onClick={onCancel}
+              className="flex-1 border-[#d4cfc6] text-[#5a5248] hover:bg-[#e8e3da]">
+              Cancel
+            </Button>
+            <Button type="submit"
+              disabled={mode === "set" && (password !== confirm || !password)}
+              className="flex-1 bg-[#c8a96e] hover:bg-[#b8996e] text-white">
+              {meta.btn}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Locked Folder Overlay ────────────────────────────────────────────────────
+function LockedFolderOverlay({ folder, onUnlock }: { folder: string; onUnlock: () => void }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center gap-6 text-[#9a9088] p-8">
+      <div className="w-24 h-24 rounded-3xl bg-[#e8e3da] flex items-center justify-center">
+        <Lock className="w-12 h-12 text-[#c8a96e]" />
+      </div>
+      <div className="text-center">
+        <p className="text-xl font-bold text-[#3d3730]">"{folder}" is locked</p>
+        <p className="text-sm text-[#9a9088] mt-1">Enter your password to view notes in this folder</p>
+      </div>
+      <Button onClick={onUnlock} className="bg-[#c8a96e] hover:bg-[#b8996e] text-white gap-2 px-6">
+        <LockOpen className="w-4 h-4" />
+        Unlock Folder
+      </Button>
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function NotesPage() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+  const userId = (user as any)?.id as number | undefined;
+
   const [activeFolder, setActiveFolder] = useState("All Notes");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedNoteId, setSelectedNoteId] = useState<number | null>(null);
@@ -246,11 +400,93 @@ export default function NotesPage() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
 
-  // Lock state
+  // ── Per-note lock state ──────────────────────────────────────────────────────
   const [lockModal, setLockModal] = useState<"set" | "unlock" | "remove" | null>(null);
   const [lockError, setLockError] = useState("");
-  // Session-unlocked note IDs (stays unlocked until page refresh)
   const [sessionUnlocked, setSessionUnlocked] = useState<Set<number>>(new Set());
+
+  // ── Folder lock state ────────────────────────────────────────────────────────
+  // folderLocks: { [folderName]: sha256Hash } — persisted in localStorage
+  const [folderLocks, setFolderLocks] = useState<Record<string, string>>(() =>
+    userId ? loadFolderLocks(userId) : {}
+  );
+  // Folders unlocked for this session only
+  const [sessionUnlockedFolders, setSessionUnlockedFolders] = useState<Set<string>>(new Set());
+  // Which folder the lock modal is targeting
+  const [folderLockModal, setFolderLockModal] = useState<{
+    folder: string;
+    mode: "set" | "verify" | "remove";
+  } | null>(null);
+  const [folderLockError, setFolderLockError] = useState("");
+
+  // Reload locks when userId becomes available (after auth)
+  useEffect(() => {
+    if (userId) setFolderLocks(loadFolderLocks(userId));
+  }, [userId]);
+
+  const isFolderLocked = (folder: string) =>
+    folder !== "All Notes" && !!folderLocks[folder];
+
+  const isFolderAccessible = (folder: string) =>
+    !isFolderLocked(folder) || sessionUnlockedFolders.has(folder);
+
+  const handleFolderLockConfirm = async (password: string, confirm?: string) => {
+    if (!folderLockModal || !userId) return;
+    const { folder, mode } = folderLockModal;
+
+    if (mode === "set") {
+      if (password !== confirm) { setFolderLockError("Passwords do not match."); return; }
+      const hash = await hashFolderPassword(password);
+      const updated = { ...folderLocks, [folder]: hash };
+      setFolderLocks(updated);
+      saveFolderLocks(userId, updated);
+      // Lock the folder immediately (remove from session unlocked)
+      setSessionUnlockedFolders(prev => { const n = new Set(prev); n.delete(folder); return n; });
+      setFolderLockModal(null);
+      setFolderLockError("");
+      // If we're currently in this folder, go back to All Notes
+      if (activeFolder === folder) { setActiveFolder("All Notes"); setSelectedNoteId(null); }
+      toast.success(`"${folder}" folder is now locked`);
+
+    } else if (mode === "verify") {
+      const hash = await hashFolderPassword(password);
+      if (hash === folderLocks[folder]) {
+        setSessionUnlockedFolders(prev => new Set([...prev, folder]));
+        setFolderLockModal(null);
+        setFolderLockError("");
+      } else {
+        setFolderLockError("Incorrect password. Please try again.");
+      }
+
+    } else if (mode === "remove") {
+      const hash = await hashFolderPassword(password);
+      if (hash === folderLocks[folder]) {
+        const updated = { ...folderLocks };
+        delete updated[folder];
+        setFolderLocks(updated);
+        saveFolderLocks(userId, updated);
+        setSessionUnlockedFolders(prev => { const n = new Set(prev); n.delete(folder); return n; });
+        setFolderLockModal(null);
+        setFolderLockError("");
+        toast.success(`Lock removed from "${folder}"`);
+      } else {
+        setFolderLockError("Incorrect password. Please try again.");
+      }
+    }
+  };
+
+  const handleFolderSelect = (folder: string) => {
+    if (folder !== "All Notes" && isFolderLocked(folder) && !sessionUnlockedFolders.has(folder)) {
+      // Show unlock prompt first, but still switch to folder (shows locked overlay)
+      setActiveFolder(folder);
+      setSelectedNoteId(null);
+      setFolderLockError("");
+      setFolderLockModal({ folder, mode: "verify" });
+    } else {
+      setActiveFolder(folder);
+      setSelectedNoteId(null);
+    }
+  };
 
   const { data: notes = [], refetch } = trpc.notes.list.useQuery(
     { folder: activeFolder === "All Notes" ? undefined : activeFolder },
@@ -438,13 +674,24 @@ export default function NotesPage() {
   return (
     <div className="flex h-full bg-[#f5f0e8] overflow-hidden" style={{ minHeight: "calc(100vh - 64px)" }}>
 
-      {/* Lock Modal */}
+      {/* Per-note Lock Modal */}
       {lockModal && (
         <LockModal
           mode={lockModal}
           onConfirm={handleLockConfirm}
           onCancel={() => { setLockModal(null); setLockError(""); }}
           error={lockError}
+        />
+      )}
+
+      {/* Folder Lock Modal */}
+      {folderLockModal && (
+        <FolderLockModal
+          folder={folderLockModal.folder}
+          mode={folderLockModal.mode}
+          onConfirm={handleFolderLockConfirm}
+          onCancel={() => { setFolderLockModal(null); setFolderLockError(""); }}
+          error={folderLockError}
         />
       )}
 
@@ -464,48 +711,79 @@ export default function NotesPage() {
             {allFolders.map((folder) => {
               const count = folder === "All Notes" ? notes.length : notes.filter((n) => n.folder === folder).length;
               const isJournal = folder === "Journal";
+              const isActive = activeFolder === folder;
+              const locked = isFolderLocked(folder);
+              const accessible = isFolderAccessible(folder);
               return (
-                <button
-                  key={folder}
-                  onClick={() => { setActiveFolder(folder); setSelectedNoteId(null); setMobileView("list"); }}
-                  className={cn(
-                    "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all text-left",
-                    activeFolder === folder
-                      ? "bg-[#c8a96e] text-white font-medium"
-                      : "text-[#5a5248] hover:bg-[#ddd8cf]"
+                <div key={folder} className="group flex items-center gap-1">
+                  <button
+                    onClick={() => { handleFolderSelect(folder); setMobileView("list"); }}
+                    className={cn(
+                      "flex-1 flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all text-left",
+                      isActive
+                        ? "bg-[#c8a96e] text-white font-medium"
+                        : "text-[#5a5248] hover:bg-[#ddd8cf]"
+                    )}
+                  >
+                    {isJournal ? (
+                      <BookOpen className="w-4 h-4 shrink-0" />
+                    ) : (
+                      <FolderOpen className="w-4 h-4 shrink-0" />
+                    )}
+                    <span className="flex-1 truncate">{folder}</span>
+                    {/* Lock status icon */}
+                    {locked && (
+                      accessible
+                        ? <LockOpen className={cn("w-3 h-3 shrink-0", isActive ? "text-white/80" : "text-[#c8a96e]")} />
+                        : <Lock className={cn("w-3 h-3 shrink-0", isActive ? "text-white/80" : "text-[#c8a96e]")} />
+                    )}
+                    {count > 0 && (
+                      <span className={cn("text-xs", isActive ? "text-white/80" : "text-[#9a9088]")}>
+                        {count}
+                      </span>
+                    )}
+                  </button>
+
+                  {/* Lock management button — hidden for All Notes, revealed on hover */}
+                  {folder !== "All Notes" && (
+                    <button
+                      title={locked ? (accessible ? "Manage lock" : "Unlock folder") : "Lock this folder"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFolderLockError("");
+                        if (locked) {
+                          // If accessible (session unlocked), offer remove lock option
+                          setFolderLockModal({ folder, mode: accessible ? "remove" : "verify" });
+                        } else {
+                          setFolderLockModal({ folder, mode: "set" });
+                        }
+                      }}
+                      className={cn(
+                        "p-1.5 rounded-lg transition-all shrink-0",
+                        "opacity-0 group-hover:opacity-100",
+                        locked
+                          ? "text-[#c8a96e] hover:bg-[#c8a96e]/15"
+                          : "text-[#9a9088] hover:bg-[#ddd8cf] hover:text-[#c8a96e]"
+                      )}
+                    >
+                      {locked ? <Lock className="w-3.5 h-3.5" /> : <LockOpen className="w-3.5 h-3.5" />}
+                    </button>
                   )}
-                >
-                  {isJournal ? (
-                    <BookOpen className="w-4 h-4 shrink-0" />
-                  ) : (
-                    <FolderOpen className="w-4 h-4 shrink-0" />
-                  )}
-                  <span className="flex-1 truncate">{folder}</span>
-                  {isJournal && (
-                    <Lock className={cn("w-3 h-3 shrink-0", activeFolder === folder ? "text-white/70" : "text-[#c8a96e]")} />
-                  )}
-                  {count > 0 && (
-                    <span className={cn("text-xs", activeFolder === folder ? "text-white/80" : "text-[#9a9088]")}>
-                      {count}
-                    </span>
-                  )}
-                </button>
+                </div>
               );
             })}
           </div>
         </ScrollArea>
 
-        {/* Journal info banner */}
-        {activeFolder === "Journal" && (
-          <div className="p-3 border-t border-[#d4cfc6]">
-            <div className="flex items-start gap-2 px-3 py-2 bg-[#c8a96e]/10 rounded-xl border border-[#c8a96e]/20">
-              <ShieldCheck className="w-4 h-4 text-[#c8a96e] shrink-0 mt-0.5" />
-              <p className="text-[10px] text-[#7a7068] leading-relaxed">
-                Journal notes can be individually locked with a password for privacy.
-              </p>
-            </div>
+        {/* Folder lock hint banner */}
+        <div className="p-3 border-t border-[#d4cfc6]">
+          <div className="flex items-start gap-2 px-3 py-2 bg-[#c8a96e]/10 rounded-xl border border-[#c8a96e]/20">
+            <ShieldCheck className="w-4 h-4 text-[#c8a96e] shrink-0 mt-0.5" />
+            <p className="text-[10px] text-[#7a7068] leading-relaxed">
+              Hover any folder and tap the lock icon to protect it with a password.
+            </p>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Notes List */}
@@ -540,6 +818,32 @@ export default function NotesPage() {
             />
           </div>
         </div>
+
+        {/* Locked folder gate — covers the note list */}
+        {isFolderLocked(activeFolder) && !isFolderAccessible(activeFolder) ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-[#e8e3da] flex items-center justify-center">
+              <Lock className="w-8 h-8 text-[#c8a96e]" />
+            </div>
+            <div>
+              <p className="font-bold text-[#3d3730] text-sm">"{activeFolder}" is locked</p>
+              <p className="text-xs text-[#9a9088] mt-1">Enter your password to see notes</p>
+            </div>
+            <button
+              onClick={() => { setFolderLockError(""); setFolderLockModal({ folder: activeFolder, mode: "verify" }); }}
+              className="px-4 py-2 rounded-xl bg-[#c8a96e] hover:bg-[#b8996e] text-white text-sm font-semibold flex items-center gap-1.5 transition-colors"
+            >
+              <LockOpen className="w-3.5 h-3.5" /> Unlock
+            </button>
+            {/* Remove lock option */}
+            <button
+              onClick={() => { setFolderLockError(""); setFolderLockModal({ folder: activeFolder, mode: "remove" }); }}
+              className="text-xs text-[#9a9088] hover:text-[#5a5248] underline transition-colors"
+            >
+              Remove lock
+            </button>
+          </div>
+        ) : (
 
         <ScrollArea className="flex-1">
           {displayedNotes.length === 0 ? (
@@ -581,6 +885,7 @@ export default function NotesPage() {
             </div>
           )}
         </ScrollArea>
+        )} {/* end folder lock gate */}
       </div>
 
       {/* Editor Panel */}
@@ -738,6 +1043,11 @@ export default function NotesPage() {
               <LockedNoteOverlay onUnlock={() => { setLockError(""); setLockModal("unlock"); }} />
             )}
           </>
+        ) : isFolderLocked(activeFolder) && !isFolderAccessible(activeFolder) ? (
+          <LockedFolderOverlay
+            folder={activeFolder}
+            onUnlock={() => { setFolderLockError(""); setFolderLockModal({ folder: activeFolder, mode: "verify" }); }}
+          />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-[#9a9088] gap-4">
             <div className="w-20 h-20 rounded-2xl bg-[#e8e3da] flex items-center justify-center">
