@@ -30,11 +30,15 @@ export default function AnnualPage() {
   const [goalsInitialized, setGoalsInitialized] = useState(false);
   const [annualInitialized, setAnnualInitialized] = useState(false);
 
-  // Initialize local state from server data
+  // Initialize local state from server data — every field must be listed here so
+  // auto-save never sends undefined for a field (which would null it in the DB)
   if (annualData && !annualInitialized) {
     const init: Record<string, any> = {};
     LIFE_CATEGORIES.forEach(({ key }) => { init[key] = (annualData as any)[key] || ""; });
     BUDGET_CATEGORIES.forEach(({ key }) => { init[key] = (annualData as any)[key] || ""; });
+    // JSON object fields — must be initialised as objects, not undefined
+    init.basicNeeds = (annualData as any).basicNeeds || {};
+    init.nonNegotiables = (annualData as any).nonNegotiables || {};
     init.knowledgeSkills = annualData.knowledgeSkills || "";
     init.passionsCallings = annualData.passionsCallings || "";
     init.naturalGifts = annualData.naturalGifts || "";

@@ -276,6 +276,17 @@ export async function getAnnualPlan(userId: number, year: number) {
   return result[0] ?? null;
 }
 
+/**
+ * Remove undefined values from an update payload so Drizzle does NOT generate
+ * "SET col = NULL" for keys the caller simply didn't provide.
+ * NULL is kept (explicit clear), undefined means "don't touch this column".
+ */
+function stripUndefined<T extends Record<string, any>>(obj: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, v]) => v !== undefined)
+  ) as Partial<T>;
+}
+
 export async function upsertAnnualPlan(
   userId: number,
   year: number,
@@ -283,14 +294,16 @@ export async function upsertAnnualPlan(
 ) {
   const db = await getDb();
   if (!db) return;
+  const clean = stripUndefined(data);
+  if (Object.keys(clean).length === 0) return; // nothing to save
   const existing = await getAnnualPlan(userId, year);
   if (existing) {
     await db
       .update(annualPlans)
-      .set(data as any)
+      .set(clean as any)
       .where(and(eq(annualPlans.userId, userId), eq(annualPlans.year, year)));
   } else {
-    await db.insert(annualPlans).values({ userId, year, ...data } as any);
+    await db.insert(annualPlans).values({ userId, year, ...clean } as any);
   }
 }
 
@@ -313,6 +326,7 @@ export async function upsertBigGoal(
 ) {
   const db = await getDb();
   if (!db) return;
+  const clean = stripUndefined(data);
   const existing = await db
     .select()
     .from(bigGoals)
@@ -325,18 +339,20 @@ export async function upsertBigGoal(
     )
     .limit(1);
   if (existing.length > 0) {
-    await db
-      .update(bigGoals)
-      .set(data as any)
-      .where(
-        and(
-          eq(bigGoals.userId, userId),
-          eq(bigGoals.year, year),
-          eq(bigGoals.position, position)
-        )
-      );
+    if (Object.keys(clean).length > 0) {
+      await db
+        .update(bigGoals)
+        .set(clean as any)
+        .where(
+          and(
+            eq(bigGoals.userId, userId),
+            eq(bigGoals.year, year),
+            eq(bigGoals.position, position)
+          )
+        );
+    }
   } else {
-    await db.insert(bigGoals).values({ userId, year, position, ...data } as any);
+    await db.insert(bigGoals).values({ userId, year, position, ...clean } as any);
   }
 }
 
@@ -367,11 +383,13 @@ export async function upsertMonthlyPlan(
 ) {
   const db = await getDb();
   if (!db) return;
+  const clean = stripUndefined(data);
+  if (Object.keys(clean).length === 0) return;
   const existing = await getMonthlyPlan(userId, year, month);
   if (existing) {
     await db
       .update(monthlyPlans)
-      .set(data as any)
+      .set(clean as any)
       .where(
         and(
           eq(monthlyPlans.userId, userId),
@@ -380,7 +398,7 @@ export async function upsertMonthlyPlan(
         )
       );
   } else {
-    await db.insert(monthlyPlans).values({ userId, year, month, ...data } as any);
+    await db.insert(monthlyPlans).values({ userId, year, month, ...clean } as any);
   }
 }
 
@@ -412,11 +430,13 @@ export async function upsertWeeklyPlan(
 ) {
   const db = await getDb();
   if (!db) return;
+  const clean = stripUndefined(data);
+  if (Object.keys(clean).length === 0) return;
   const existing = await getWeeklyPlan(userId, year, weekNumber);
   if (existing) {
     await db
       .update(weeklyPlans)
-      .set(data as any)
+      .set(clean as any)
       .where(
         and(
           eq(weeklyPlans.userId, userId),
@@ -425,7 +445,7 @@ export async function upsertWeeklyPlan(
         )
       );
   } else {
-    await db.insert(weeklyPlans).values({ userId, year, weekNumber, weekStartDate, ...data } as any);
+    await db.insert(weeklyPlans).values({ userId, year, weekNumber, weekStartDate, ...clean } as any);
   }
 }
 
@@ -449,14 +469,16 @@ export async function upsertDailyEntry(
 ) {
   const db = await getDb();
   if (!db) return;
+  const clean = stripUndefined(data);
+  if (Object.keys(clean).length === 0) return;
   const existing = await getDailyEntry(userId, date);
   if (existing) {
     await db
       .update(dailyEntries)
-      .set(data as any)
+      .set(clean as any)
       .where(and(eq(dailyEntries.userId, userId), eq(dailyEntries.date, date)));
   } else {
-    await db.insert(dailyEntries).values({ userId, date, ...data } as any);
+    await db.insert(dailyEntries).values({ userId, date, ...clean } as any);
   }
 }
 
