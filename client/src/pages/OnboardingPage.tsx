@@ -344,6 +344,11 @@ export default function OnboardingPage() {
         <p className="text-center text-xs text-muted-foreground mt-4">
           You can update all of this anytime in <span className="underline">Settings</span>.
         </p>
+
+        {/* Footer */}
+        <p className="text-center text-xs text-muted-foreground mt-6">
+          BDB Digital Wellness Planner · <span className="font-semibold text-foreground/70">by Leah Marville</span>
+        </p>
       </div>
     </div>
   );

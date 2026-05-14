@@ -104,6 +104,14 @@ export default function Home() {
           </Button>
         </a>
       </div>
+
+      {/* Footer */}
+      <div className="px-6 py-6 text-center bg-background border-t border-border">
+        <p className="text-sm text-muted-foreground">
+          BDB Digital Wellness Planner · <span className="font-semibold text-foreground">by Leah Marville</span>
+        </p>
+        <p className="text-xs text-muted-foreground mt-1">© {new Date().getFullYear()} Be Do Become Wellness · All rights reserved</p>
+      </div>
     </div>
   );
 }
