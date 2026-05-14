@@ -121,6 +121,14 @@ export default function LoginPage() {
             </div>
           ))}
         </div>
+
+        {/* Author credit */}
+        <div className="relative z-10 pt-8 border-t border-white/10">
+          <p className="text-white/40 text-xs">
+            BDB Digital Wellness Planner<br />
+            <span className="text-white/60 font-semibold">by Leah Marville</span> · Be Do Become Wellness
+          </p>
+        </div>
       </div>
 
       {/* Right panel — form */}
@@ -311,6 +319,10 @@ export default function LoginPage() {
               </Button>
             </div>
           )}
+          {/* Mobile author credit — hidden on desktop where left panel shows it */}
+          <p className="lg:hidden text-center text-xs text-[#b0a090] mt-8">
+            BDB Digital Wellness Planner · <span className="font-semibold text-[#8a7a6a]">by Leah Marville</span>
+          </p>
         </div>
       </div>
     </div>
