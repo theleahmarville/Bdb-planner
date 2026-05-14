@@ -1238,6 +1238,19 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
       return { success: true, zionMessage };
     }),
 
+  // Delete today's reflection so the user can redo it
+  clearTodayReflection: protectedProcedure
+    .input(z.object({ date: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { nightReflections } = await import('../drizzle/schema');
+      const { eq, and } = await import('drizzle-orm');
+      const db = await (await import('./db')).getDb();
+      if (!db) return { success: false };
+      await db.delete(nightReflections)
+        .where(and(eq(nightReflections.userId, ctx.user.id), eq(nightReflections.date, input.date)));
+      return { success: true };
+    }),
+
   // ── saveParsedItem ─────────────────────────────────────────────────────────
   // Writes a single parsed brain-dump item into the correct planner table.
   // Called when the user clicks "Save" on a Zion action card.

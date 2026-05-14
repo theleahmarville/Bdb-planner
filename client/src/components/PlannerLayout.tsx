@@ -417,17 +417,13 @@ export default function PlannerLayout({
           </div>
         </Link>
 
-        {/* Nightly Reflection shortcut */}
-        {nightlyDue && (
-          <button
-            onClick={() => setNightReflectionOpen(true)}
-            className={cn("sidebar-nav-item w-full text-left hover:bg-violet-500/10", sidebarOpen && "ml-2 text-sm")}
-            title={!sidebarOpen ? "Tonight's Reflection" : undefined}
-          >
-            <Moon size={sidebarOpen ? 15 : 18} className="flex-shrink-0 text-violet-500" />
-            {sidebarOpen && <span className="text-violet-600 text-[13px]">Tonight's Reflection</span>}
-          </button>
-        )}
+        {/* Nightly Reflection — always visible; redo if already completed */}
+        <NightlyReflectionButton
+          sidebarOpen={sidebarOpen}
+          nightlyStatus={nightlyStatus}
+          today={today}
+          onOpen={() => setNightReflectionOpen(true)}
+        />
 
         {/* AI Digest */}
         <button
@@ -618,6 +614,66 @@ export default function PlannerLayout({
         open={remindersOpen}
         onClose={() => setRemindersOpen(false)}
       />
+    </div>
+  );
+}
+
+// ── NightlyReflectionButton ───────────────────────────────────────────────────
+// Always shown in the sidebar. Pulses + says "Tonight" when not yet done.
+// After completion shows a "Redo" option so the user can re-open it any time.
+function NightlyReflectionButton({
+  sidebarOpen,
+  nightlyStatus,
+  today,
+  onOpen,
+}: {
+  sidebarOpen: boolean;
+  nightlyStatus: { due?: boolean; completed?: boolean; date?: string } | null | undefined;
+  today: string;
+  onOpen: () => void;
+}) {
+  const clearMutation = trpc.zion.clearTodayReflection.useMutation();
+  const utils = trpc.useUtils();
+
+  const completed = !!(nightlyStatus?.completed);
+
+  const handleRedo = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await clearMutation.mutateAsync({ date: today });
+      await utils.zion.checkNightlyPrompt.invalidate();
+      onOpen();
+    } catch {
+      // fall through — still open the modal
+      onOpen();
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-0.5">
+      <button
+        onClick={completed ? handleRedo : onOpen}
+        className={cn(
+          "sidebar-nav-item flex-1 w-full text-left hover:bg-violet-500/10",
+          sidebarOpen && "ml-2 text-sm"
+        )}
+        title={!sidebarOpen ? (completed ? "Redo Reflection" : "Tonight's Reflection") : undefined}
+      >
+        <Moon size={sidebarOpen ? 15 : 18} className={cn("flex-shrink-0", completed ? "text-violet-300" : "text-violet-500")} />
+        {sidebarOpen && (
+          <span className={cn("text-[13px]", completed ? "text-violet-400" : "text-violet-600")}>
+            {completed ? "Redo Reflection" : "Tonight's Reflection"}
+          </span>
+        )}
+        {!completed && !sidebarOpen && (
+          <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-violet-500 animate-pulse" />
+        )}
+        {!completed && sidebarOpen && (
+          <span className="ml-auto flex items-center gap-0.5 rounded-full text-[9px] font-bold px-1.5 py-0.5 bg-violet-600 text-white animate-pulse">
+            <Moon size={8} /> Tonight
+          </span>
+        )}
+      </button>
     </div>
   );
 }
