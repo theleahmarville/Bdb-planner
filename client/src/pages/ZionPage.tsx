@@ -475,7 +475,7 @@ export default function ZionPage() {
   }
 
   return (
-    <div className="flex flex-col bg-[#faf8f5]" style={{ height: "calc(100vh - 0px)" }}>
+    <div className="flex-1 flex flex-col bg-[#faf8f5] min-h-0 relative">
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-[#e8e0d5] bg-white/80 backdrop-blur-sm shrink-0">
         <div className="flex items-center gap-3">
@@ -522,7 +522,7 @@ export default function ZionPage() {
                 setInput(c.prompt);
                 setTimeout(() => textareaRef.current?.focus(), 50);
               }}
-              className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-white border border-[#e8e0d5] text-[#8a7a6a] hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-white border border-[#e8e0d5] text-[#8a7a6a] hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 active:bg-emerald-100 active:border-emerald-300 active:scale-95 transition-all cursor-pointer select-none"
             >
               {c.icon}{c.label}
             </button>

@@ -567,7 +567,7 @@ export default function PlannerLayout({
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto pb-safe md:pb-0">
-          <div className="pb-16 md:pb-0">
+          <div className="flex flex-col min-h-full pb-16 md:pb-0">
             {children}
           </div>
         </main>

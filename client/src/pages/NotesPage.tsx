@@ -672,7 +672,7 @@ export default function NotesPage() {
   };
 
   return (
-    <div className="flex h-full bg-[#f5f0e8] overflow-hidden" style={{ minHeight: "calc(100vh - 64px)" }}>
+    <div className="flex flex-1 bg-[#f5f0e8] overflow-hidden min-h-0">
 
       {/* Per-note Lock Modal */}
       {lockModal && (
