@@ -163,6 +163,7 @@ function LeaderboardSection() {
     { refetchInterval: 30_000 }
   );
   const medals = ["🥇", "🥈", "🥉"];
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   return (
     <div className="planner-card">
@@ -190,40 +191,61 @@ function LeaderboardSection() {
         <div className="space-y-2">
           {entries.map((entry, i) => {
             const isMe = entry.userId === user?.id;
+            const isExpanded = expandedId === entry.userId;
+            const hasNote = !!entry.note?.trim();
             return (
               <div
                 key={entry.userId}
+                onClick={() => hasNote && setExpandedId(isExpanded ? null : entry.userId)}
                 className={cn(
-                  "flex items-center gap-3 px-3 py-3 rounded-xl transition-colors",
-                  isMe ? "bg-emerald-50 border border-emerald-200" : i < 3 ? "bg-[#faf8f5] border border-[#e8e0d5]" : "bg-[#faf8f5]"
+                  "px-3 py-3 rounded-xl transition-all",
+                  isMe ? "bg-emerald-50 border border-emerald-200" : i < 3 ? "bg-[#faf8f5] border border-[#e8e0d5]" : "bg-[#faf8f5]",
+                  hasNote && "cursor-pointer hover:border-emerald-300 hover:shadow-sm active:scale-[0.99]"
                 )}
               >
-                <span className="w-6 text-center text-sm font-black text-muted-foreground shrink-0">
-                  {i < 3 ? medals[i] : `${i + 1}`}
-                </span>
-                <Avatar name={entry.firstName} avatarUrl={entry.avatarUrl} size="sm" />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-sm font-semibold truncate">
-                      {entry.firstName}{isMe && <span className="text-emerald-600 ml-1">(you)</span>}
-                    </span>
-                    {entry.streak >= 2 && (
-                      <span className="flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-600">
-                        <Flame size={9} /> {entry.streak}d streak
+                <div className="flex items-center gap-3">
+                  <span className="w-6 text-center text-sm font-black text-muted-foreground shrink-0">
+                    {i < 3 ? medals[i] : `${i + 1}`}
+                  </span>
+                  <Avatar name={entry.firstName} avatarUrl={entry.avatarUrl} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-sm font-semibold truncate">
+                        {entry.firstName}{isMe && <span className="text-emerald-600 ml-1">(you)</span>}
                       </span>
-                    )}
-                    {(entry as any).totalCheckIns > 0 && (
-                      <span className="flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600">
-                        <Hash size={8} />{(entry as any).totalCheckIns} total
-                      </span>
+                      {entry.streak >= 2 && (
+                        <span className="flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-600">
+                          <Flame size={9} /> {entry.streak}d streak
+                        </span>
+                      )}
+                      {(entry as any).totalCheckIns > 0 && (
+                        <span className="flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600">
+                          <Hash size={8} />{(entry as any).totalCheckIns} total
+                        </span>
+                      )}
+                    </div>
+                    {hasNote && !isExpanded && (
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">
+                        "{entry.note}" <span className="text-emerald-500 font-medium">tap to read</span>
+                      </p>
                     )}
                   </div>
-                  {entry.note && <p className="text-xs text-muted-foreground truncate mt-0.5">"{entry.note}"</p>}
+                  <div className="shrink-0 flex flex-col items-end gap-0.5">
+                    <StarRatingDisplay value={entry.rating} />
+                    <span className="text-[10px] text-muted-foreground">{RATING_LABELS[entry.rating]?.emoji}</span>
+                  </div>
                 </div>
-                <div className="shrink-0 flex flex-col items-end gap-0.5">
-                  <StarRatingDisplay value={entry.rating} />
-                  <span className="text-[10px] text-muted-foreground">{RATING_LABELS[entry.rating]?.emoji}</span>
-                </div>
+
+                {/* Expanded note */}
+                {isExpanded && hasNote && (
+                  <div className={cn(
+                    "mt-3 pt-3 border-t text-sm leading-relaxed",
+                    isMe ? "border-emerald-200 text-emerald-800" : "border-[#e8e0d5] text-foreground/80"
+                  )}>
+                    <p className="italic">"{entry.note}"</p>
+                    <p className="text-[10px] text-muted-foreground mt-1.5 font-medium">Tap to collapse</p>
+                  </div>
+                )}
               </div>
             );
           })}
