@@ -17,14 +17,14 @@ export async function sendWelcomeEmail(to: string, name: string) {
     await resend.emails.send({
       from: FROM_ADDRESS,
       to,
-      subject: "Welcome to BDB Digital Planner 🌟",
+      subject: "Welcome to BDB Digital Wellness Planner 🌟",
       html: `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Welcome to BDB Planner</title>
+  <title>Welcome to BDB Digital Wellness Planner</title>
 </head>
 <body style="margin:0;padding:0;background-color:#faf8f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#faf8f5;padding:40px 20px;">
@@ -36,7 +36,7 @@ export async function sendWelcomeEmail(to: string, name: string) {
           <tr>
             <td style="background:linear-gradient(135deg,#10b981,#059669);padding:40px 40px 32px;text-align:center;">
               <p style="margin:0 0 8px;font-size:13px;color:rgba(255,255,255,0.8);letter-spacing:2px;text-transform:uppercase;font-weight:600;">Be · Do · Become</p>
-              <h1 style="margin:0;font-size:32px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">BDB Digital Planner</h1>
+              <h1 style="margin:0;font-size:32px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">BDB Digital Wellness Planner</h1>
             </td>
           </tr>
 
@@ -45,7 +45,7 @@ export async function sendWelcomeEmail(to: string, name: string) {
             <td style="padding:40px;">
               <h2 style="margin:0 0 16px;font-size:24px;font-weight:800;color:#1a1a1a;">Welcome, ${firstName}! 🌟</h2>
               <p style="margin:0 0 20px;font-size:15px;line-height:1.7;color:#4a4a4a;">
-                You've just taken a powerful step toward your best year. The BDB Digital Planner is your personal command centre for turning your vision into reality.
+                You've just taken a powerful step toward your best year. The BDB Digital Wellness Planner is your personal command centre for turning your vision into reality.
               </p>
 
               <div style="background:#faf8f5;border-radius:12px;padding:24px;margin:0 0 28px;">
@@ -84,7 +84,7 @@ export async function sendWelcomeEmail(to: string, name: string) {
           <tr>
             <td style="padding:24px 40px;border-top:1px solid #f0ebe4;text-align:center;">
               <p style="margin:0;font-size:12px;color:#b0a090;line-height:1.6;">
-                BDB Digital Planner by <strong>Leah Marville</strong> · Be Do Become Wellness<br />
+                BDB Digital Wellness Planner by <strong>Leah Marville</strong> · Be Do Become Wellness<br />
                 You're receiving this because you just created an account.
               </p>
             </td>
@@ -116,7 +116,7 @@ export async function sendPasswordResetEmail(to: string, resetToken: string) {
     await resend.emails.send({
       from: FROM_ADDRESS,
       to,
-      subject: "Reset your BDB Planner password",
+      subject: "Reset your BDB Digital Wellness Planner password",
       html: `
 <!DOCTYPE html>
 <html>
@@ -151,7 +151,7 @@ export async function sendPasswordResetEmail(to: string, resetToken: string) {
         </tr>
         <tr>
           <td style="padding:20px 40px;border-top:1px solid #f0ebe4;text-align:center;">
-            <p style="margin:0;font-size:12px;color:#b0a090;">BDB Digital Planner by <strong>Leah Marville</strong> · Be Do Become Wellness</p>
+            <p style="margin:0;font-size:12px;color:#b0a090;">BDB Digital Wellness Planner by <strong>Leah Marville</strong> · Be Do Become Wellness</p>
           </td>
         </tr>
       </table>

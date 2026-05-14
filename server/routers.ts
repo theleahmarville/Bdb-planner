@@ -1735,7 +1735,7 @@ const slackRouter = router({
     }
     const { default: axios } = await import("axios");
     await axios.post(integration.slackWebhookUrl, {
-      text: "✅ BDB Planner — Slack integration test successful! Your notifications are working.",
+      text: "✅ BDB Digital Wellness Planner — Slack integration test successful! Your notifications are working.",
     });
     return { success: true };
   }),

@@ -104,7 +104,7 @@ export default function LoginPage() {
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-500 to-green-600">Your year.</span>
             </h2>
             <p className="text-white/60 text-lg leading-relaxed max-w-sm">
-              The digital planner built for visionaries who are ready to turn their dreams into daily actions.
+              The digital wellness planner built for visionaries who are ready to turn their dreams into daily actions.
             </p>
           </div>
         </div>

@@ -250,7 +250,7 @@ export default function PlannerLayout({
     if (isIntegrations) return "Integrations";
     if (isZion) return "Zion AI Assistant";
     if (isCommunity) return "Community";
-    return "BDB Planner";
+    return "BDB Digital Wellness Planner";
   };
 
   const monthlyHref = `/monthly/${currentYear}/${currentMonth}`;

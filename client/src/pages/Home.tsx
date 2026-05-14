@@ -31,10 +31,10 @@ export default function Home() {
         <div className="relative px-6 py-24 text-center">
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-background/20 text-background/70 text-sm mb-8">
             <Star size={14} />
-            <span>2026 Digital Planner</span>
+            <span>2026 Digital Wellness Planner</span>
           </div>
           <h1 className="text-5xl md:text-7xl font-black text-background tracking-tight mb-6">
-            BDB Digital<br />Planner
+            BDB Digital<br />Wellness Planner
           </h1>
           <p className="text-background/70 text-lg md:text-xl max-w-2xl mx-auto mb-10">
             A visionary's toolkit for planning your best year. Click-to-edit, auto-save, Google Calendar sync, and Notion integration — all in one place.

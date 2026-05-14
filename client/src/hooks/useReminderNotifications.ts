@@ -42,7 +42,7 @@ export function useReminderNotifications(enabled: boolean) {
         // Fire the notification
         sentIds.current.add(reminder.id);
         try {
-          new Notification("BDB Planner Reminder", {
+          new Notification("BDB Digital Wellness Planner", {
             body: reminder.title,
             icon: "/favicon.ico",
             tag: `bdb-reminder-${reminder.id}`,
