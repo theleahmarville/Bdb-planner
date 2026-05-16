@@ -4,10 +4,10 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { toast } from "sonner";
 import {
   Star, Send, Trophy, Flame, Users, MessageCircle, CheckCircle2,
-  Loader2, Flag, Trash2, ChevronUp, Hash,
+  Loader2, Flag, Trash2, ChevronUp, Hash, Crown, Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, startOfISOWeek, endOfISOWeek, format } from "date-fns";
 
 const today = new Date().toISOString().slice(0, 10);
 
@@ -155,6 +155,106 @@ function CheckInSection() {
   );
 }
 
+// ── Weekly Top 3 podium ───────────────────────────────────────────────────────
+const PODIUM_GRADIENTS = [
+  "from-yellow-400 to-amber-500",   // 1st
+  "from-slate-300 to-slate-400",    // 2nd
+  "from-amber-600 to-amber-700",    // 3rd
+];
+const PODIUM_LABELS = ["1st", "2nd", "3rd"];
+const CROWN_SIZES = ["w-6 h-6", "w-5 h-5", "w-4 h-4"];
+
+function WeeklyTopThree() {
+  const now = new Date();
+  const weekStart = format(startOfISOWeek(now), "yyyy-MM-dd");
+  const weekEnd   = format(endOfISOWeek(now),   "yyyy-MM-dd");
+
+  const { data: top = [], isLoading } = trpc.community.weeklyTop.useQuery(
+    { weekStart, weekEnd },
+    { staleTime: 60_000 }
+  );
+
+  if (isLoading) return (
+    <div className="flex justify-center py-4">
+      <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+    </div>
+  );
+  if (top.length === 0) return (
+    <div className="text-center py-4 text-xs text-muted-foreground italic">
+      No check-ins yet this week — be the first! 🚀
+    </div>
+  );
+
+  // Celebration message
+  const names = top.map(e => e.firstName);
+  const celebrationMsg =
+    names.length === 1
+      ? `🎉 ${names[0]} is leading the pack this week! Drop a message to cheer them on.`
+      : names.length === 2
+      ? `🎉 ${names[0]} and ${names[1]} are crushing it this week! Let them know they're seen.`
+      : `🎉 ${names[0]}, ${names[1]}, and ${names[2]} are this week's top performers! Celebrate them in the chat below.`;
+
+  return (
+    <div className="mb-5">
+      {/* Podium */}
+      <div className="flex items-end justify-center gap-3 mb-4">
+        {/* Reorder: 2nd | 1st | 3rd */}
+        {[1, 0, 2].map((rank) => {
+          const entry = top[rank];
+          if (!entry) return <div key={rank} className="w-20" />;
+          const isFirst = rank === 0;
+          return (
+            <div key={entry.userId} className={cn("flex flex-col items-center gap-1.5", isFirst ? "mb-0" : "mb-0 mt-4")}>
+              {/* Crown for 1st */}
+              {isFirst && <Crown className={cn("text-yellow-500", CROWN_SIZES[rank])} />}
+
+              {/* Avatar */}
+              <div className={cn(
+                "rounded-full overflow-hidden border-4 flex-shrink-0 flex items-center justify-center font-bold text-white bg-gradient-to-br from-emerald-500 to-green-600",
+                isFirst ? "w-16 h-16 border-yellow-400 text-base" : "w-12 h-12 border-slate-300 text-xs"
+              )}>
+                {entry.avatarUrl
+                  ? <img src={entry.avatarUrl} alt={entry.firstName} className="w-full h-full object-cover" />
+                  : entry.firstName.charAt(0).toUpperCase()
+                }
+              </div>
+
+              {/* Name */}
+              <p className={cn("font-bold text-center leading-tight", isFirst ? "text-sm" : "text-xs")}>
+                {entry.firstName}
+              </p>
+
+              {/* Stats */}
+              <p className="text-[10px] text-muted-foreground text-center leading-snug">
+                {entry.checkInCount}× · ★{entry.avgRating}
+              </p>
+
+              {/* Podium block */}
+              <div className={cn(
+                "w-full rounded-t-lg flex items-center justify-center text-white text-[10px] font-black",
+                `bg-gradient-to-b ${PODIUM_GRADIENTS[rank]}`,
+                isFirst ? "h-10 w-20 text-sm" : "h-7 w-16"
+              )}>
+                {PODIUM_LABELS[rank]}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Celebration prompt */}
+      <div className="flex items-start gap-2.5 p-3 rounded-xl bg-gradient-to-r from-amber-50 to-yellow-50 border border-amber-200">
+        <Sparkles size={15} className="text-amber-500 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-amber-800 font-medium leading-relaxed">{celebrationMsg}</p>
+      </div>
+
+      <div className="mt-4 border-t border-[#e8e0d5] pt-4">
+        <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Today's Board</p>
+      </div>
+    </div>
+  );
+}
+
 // ── Leaderboard Section ───────────────────────────────────────────────────────
 function LeaderboardSection() {
   const { user } = useAuth();
@@ -178,6 +278,9 @@ function LeaderboardSection() {
           </p>
         </div>
       </div>
+
+      {/* Weekly top 3 podium */}
+      <WeeklyTopThree />
 
       {isLoading ? (
         <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>

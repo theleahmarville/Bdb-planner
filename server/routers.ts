@@ -56,6 +56,7 @@ import {
   upsertDailyCheckIn,
   getMyCheckIn,
   getTodayLeaderboard,
+  getWeeklyTopPerformers,
   getCommunityMessages,
   sendCommunityMessage,
   deleteCommunityMessage,
@@ -1878,6 +1879,15 @@ const communityRouter = router({
     .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
     .query(async ({ input }) => {
       return getTodayLeaderboard(input.date);
+    }),
+
+  weeklyTop: protectedProcedure
+    .input(z.object({
+      weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      weekEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    }))
+    .query(async ({ input }) => {
+      return getWeeklyTopPerformers(input.weekStart, input.weekEnd);
     }),
 
   messages: protectedProcedure

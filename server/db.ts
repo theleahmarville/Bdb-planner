@@ -1473,6 +1473,44 @@ export async function getTodayLeaderboard(date: string): Promise<Array<{
   }
 }
 
+export async function getWeeklyTopPerformers(weekStart: string, weekEnd: string): Promise<Array<{
+  userId: number;
+  firstName: string;
+  avatarUrl: string | null;
+  checkInCount: number;
+  avgRating: number;
+  score: number;
+}>> {
+  const pool = getPool();
+  if (!pool) return [];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT c.userId, u.name, u.avatarUrl,
+              COUNT(*) AS checkInCount,
+              ROUND(AVG(c.rating), 1) AS avgRating,
+              ROUND(COUNT(*) * AVG(c.rating), 2) AS score
+       FROM \`daily_check_ins\` c
+       JOIN \`users\` u ON u.id = c.userId
+       WHERE c.date >= ? AND c.date <= ?
+       GROUP BY c.userId, u.name, u.avatarUrl
+       ORDER BY score DESC, checkInCount DESC
+       LIMIT 3`,
+      [weekStart, weekEnd]
+    );
+    return (rows as any[]).map((row: any) => ({
+      userId: row.userId as number,
+      firstName: (row.name as string || "Friend").split(" ")[0],
+      avatarUrl: (row.avatarUrl as string | null) ?? null,
+      checkInCount: Number(row.checkInCount),
+      avgRating: Number(row.avgRating),
+      score: Number(row.score),
+    }));
+  } finally {
+    conn.release();
+  }
+}
+
 export async function getCommunityMessages(opts: { beforeId?: number; limit?: number } = {}): Promise<Array<{
   id: number;
   userId: number;
