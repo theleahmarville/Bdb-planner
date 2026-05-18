@@ -186,6 +186,7 @@ export default function IntegrationsPage() {
   };
 
   const [notionSyncing, setNotionSyncing] = useState(false);
+  const [notionClearing, setNotionClearing] = useState(false);
 
   const handleSyncGoalsToNotion = async () => {
     setNotionSyncing(true);
@@ -217,6 +218,27 @@ export default function IntegrationsPage() {
       toast.error("Failed to save Notion settings.");
     } finally {
       setNotionSaving(false);
+    }
+  };
+
+  const handleClearNotion = async () => {
+    setNotionClearing(true);
+    try {
+      // Clear from user_integrations table
+      await clearIntegrationsMutation.mutateAsync({ field: "notion" });
+      // Also wipe from annual data (legacy storage location)
+      await saveMutation.mutateAsync({
+        year: YEAR,
+        data: { notionToken: "", notionDatabaseId: "" },
+      });
+      await refetchAnnual();
+      setNotionToken("");
+      setNotionDbId("");
+      toast.success("Notion disconnected.");
+    } catch {
+      toast.error("Failed to disconnect Notion.");
+    } finally {
+      setNotionClearing(false);
     }
   };
 
@@ -541,6 +563,18 @@ export default function IntegrationsPage() {
             {notionSyncing ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <ExternalLink size={14} className="mr-1.5" />}
             Sync Goals to Notion
           </Button>
+          {(notionToken || notionDbId) && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClearNotion}
+              disabled={notionClearing}
+              className="text-destructive hover:text-destructive"
+            >
+              {notionClearing ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
+              Disconnect Notion
+            </Button>
+          )}
         </div>
       </div>
     </div>
