@@ -1785,7 +1785,10 @@ const googleCalendarRouter = router({
     const state = Buffer.from(JSON.stringify({ userId: ctx.user.id })).toString("base64");
     const url = oauth2Client.generateAuthUrl({
       access_type: "offline",
-      scope: ["https://www.googleapis.com/auth/calendar.events"],
+      scope: [
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/gmail.readonly",
+      ],
       prompt: "consent",
       state,
     });
@@ -1854,6 +1857,134 @@ const googleCalendarRouter = router({
     const integration = await getUserIntegrations(ctx.user.id);
     return { connected: !!(integration?.googleAccessToken) };
   }),
+});
+
+// ─── Gmail Router ─────────────────────────────────────────────────────────────
+const gmailRouter = router({
+  /** Whether this user has Gmail scope granted */
+  status: protectedProcedure.query(async ({ ctx }) => {
+    const integration = await getUserIntegrations(ctx.user.id);
+    return {
+      connected: !!(integration?.googleAccessToken),
+      gmailEnabled: !!(integration as any)?.gmailEnabled,
+    };
+  }),
+
+  /** Fetch + AI-summarise today's emails */
+  summarizeToday: protectedProcedure
+    .input(z.object({ date: z.string() })) // YYYY-MM-DD in user's local time
+    .mutation(async ({ ctx, input }) => {
+      const integration = await getUserIntegrations(ctx.user.id);
+      if (!integration?.googleAccessToken) {
+        throw new Error("Google account not connected. Connect it in Integrations.");
+      }
+      if (!(integration as any).gmailEnabled) {
+        throw new Error("Gmail access not yet granted. Re-authorize your Google account in Integrations to enable this.");
+      }
+
+      const { google } = await import("googleapis");
+      const clientId = process.env.GOOGLE_CLIENT_ID!;
+      const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
+      const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback";
+
+      const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+      oauth2Client.setCredentials({
+        access_token: integration.googleAccessToken,
+        refresh_token: integration.googleRefreshToken ?? undefined,
+        expiry_date: integration.googleTokenExpiry ? integration.googleTokenExpiry.getTime() : undefined,
+      });
+
+      // Refresh token if needed
+      try {
+        const tokenInfo = await oauth2Client.getAccessToken();
+        if (tokenInfo.token && tokenInfo.token !== integration.googleAccessToken) {
+          await upsertUserIntegrations(ctx.user.id, { googleAccessToken: tokenInfo.token } as any);
+        }
+      } catch { /* token might still be valid */ }
+
+      const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+
+      // Build a Gmail search query: emails received on input.date
+      // Gmail uses date in YYYY/MM/DD format
+      const dateParts = input.date.split("-");
+      const gmailDate = `${dateParts[0]}/${dateParts[1]}/${dateParts[2]}`;
+      const nextDay = new Date(input.date);
+      nextDay.setDate(nextDay.getDate() + 1);
+      const nextDateParts = nextDay.toISOString().slice(0, 10).split("-");
+      const gmailNextDate = `${nextDateParts[0]}/${nextDateParts[1]}/${nextDateParts[2]}`;
+
+      let messageList: any[] = [];
+      try {
+        const listRes = await gmail.users.messages.list({
+          userId: "me",
+          q: `after:${gmailDate} before:${gmailNextDate} -category:promotions -category:social`,
+          maxResults: 25,
+        });
+        messageList = listRes.data.messages ?? [];
+      } catch (err: any) {
+        if (err?.status === 403 || err?.code === 403) {
+          throw new Error("Gmail permission denied. Please re-authorize your Google account in Integrations.");
+        }
+        throw err;
+      }
+
+      if (messageList.length === 0) {
+        return {
+          summary: "No emails found for today outside of Promotions and Social categories. Your inbox looks clear! 🎉",
+          emailCount: 0,
+          emails: [],
+        };
+      }
+
+      // Fetch details for each message (subject, from, snippet)
+      const emailDetails = await Promise.all(
+        messageList.slice(0, 20).map(async (msg) => {
+          try {
+            const detail = await gmail.users.messages.get({
+              userId: "me",
+              id: msg.id!,
+              format: "metadata",
+              metadataHeaders: ["Subject", "From", "Date"],
+            });
+            const headers = detail.data.payload?.headers ?? [];
+            const subject = headers.find((h: any) => h.name === "Subject")?.value ?? "(no subject)";
+            const from = headers.find((h: any) => h.name === "From")?.value ?? "Unknown";
+            const snippet = detail.data.snippet ?? "";
+            return { subject, from, snippet };
+          } catch {
+            return null;
+          }
+        })
+      );
+      const validEmails = emailDetails.filter(Boolean) as { subject: string; from: string; snippet: string }[];
+
+      // Use Claude to summarise
+      const Anthropic = (await import("@anthropic-ai/sdk")).default;
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+      const emailsText = validEmails.map((e, i) =>
+        `${i + 1}. From: ${e.from}\n   Subject: ${e.subject}\n   Preview: ${e.snippet}`
+      ).join("\n\n");
+
+      const response = await anthropic.messages.create({
+        model: "claude-opus-4-5",
+        max_tokens: 800,
+        messages: [{
+          role: "user",
+          content: `You are Zion, a wellness assistant. Summarise the following ${validEmails.length} emails from today in a warm, helpful tone. Group by theme if possible. Flag any action items or urgent messages. Keep it concise — use bullet points.
+
+${emailsText}`,
+        }],
+      });
+
+      const summary = response.content[0].type === "text" ? response.content[0].text : "Could not generate summary.";
+
+      return {
+        summary,
+        emailCount: validEmails.length,
+        emails: validEmails,
+      };
+    }),
 });
 
 // ─── Community Router ─────────────────────────────────────────────────────────
@@ -1996,6 +2127,7 @@ export const appRouter = router({
   reminders: remindersRouter,
   slack: slackRouter,
   googleCalendar: googleCalendarRouter,
+  gmail: gmailRouter,
   search: router({
     global: protectedProcedure
       .input(z.object({ query: z.string().min(1).max(200) }))

@@ -24,8 +24,11 @@ export default function IntegrationsPage() {
   const saveIntegrationsMutation = trpc.integrations.save.useMutation();
   const clearIntegrationsMutation = trpc.integrations.clear.useMutation();
 
-  // Google Calendar
+  // Google Calendar + Gmail (share same OAuth tokens)
   const { data: gcalStatus, refetch: refetchGcal } = trpc.googleCalendar.status.useQuery(undefined, {
+    enabled: isAuthenticated,
+  });
+  const { data: gmailStatus, refetch: refetchGmail } = trpc.gmail.status.useQuery(undefined, {
     enabled: isAuthenticated,
   });
   const getAuthUrlMutation = trpc.googleCalendar.getAuthUrl.useMutation();
@@ -75,7 +78,13 @@ export default function IntegrationsPage() {
     if (connectedParam === "google") {
       toast.success("Google Calendar connected successfully!");
       refetchGcal();
-      // Remove query param from URL
+      refetchGmail();
+      window.history.replaceState({}, "", "/integrations");
+    }
+    if (connectedParam === "google_gmail") {
+      toast.success("Google Calendar + Gmail connected! Zion can now summarise your emails.");
+      refetchGcal();
+      refetchGmail();
       window.history.replaceState({}, "", "/integrations");
     }
     if (errorParam) {
@@ -290,6 +299,54 @@ export default function IntegrationsPage() {
               {gcalConnecting ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <Plug size={14} className="mr-1.5" />}
               Connect Google Calendar
             </Button>
+          </div>
+        )}
+
+        {/* ── Gmail sub-section ── */}
+        {gcalConnected && (
+          <div className="mt-4 pt-4 border-t border-border">
+            <div className="flex items-center gap-3 mb-3">
+              {/* Gmail envelope icon */}
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "#EA4335" }}>
+                <svg viewBox="0 0 24 24" className="w-4 h-4" fill="white">
+                  <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                </svg>
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="font-semibold text-sm">Gmail Summary for Zion</p>
+                  {gmailStatus?.gmailEnabled ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-100 rounded-full px-2 py-0.5">
+                      <Check size={10} /> Enabled
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5">
+                      Re-auth needed
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">Let Zion read & summarise your emails from the day.</p>
+              </div>
+            </div>
+            {gmailStatus?.gmailEnabled ? (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-start gap-2">
+                <Check size={14} className="text-green-600 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-green-700">Gmail access granted. In Zion, tap the <strong>Emails</strong> chip to get a daily summary.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
+                  <AlertCircle size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                  <p className="text-xs text-amber-700">
+                    Your current Google connection doesn't include Gmail access. Click <strong>Re-authorize</strong> to grant it — your calendar will still work.
+                  </p>
+                </div>
+                <Button size="sm" onClick={handleConnectGoogle} disabled={gcalConnecting} variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50">
+                  {gcalConnecting ? <Loader2 size={12} className="mr-1.5 animate-spin" /> : null}
+                  Re-authorize to enable Gmail
+                </Button>
+              </div>
+            )}
           </div>
         )}
 

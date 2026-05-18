@@ -9,7 +9,7 @@ import {
   Sparkles, Mic, MicOff, Send, Trash2, CheckCircle2,
   Calendar, Target, BookOpen, Heart, BarChart2, Loader2,
   Volume2, ChevronDown, Bell, DollarSign, Share2, Smile,
-  ExternalLink, SaveAll,
+  ExternalLink, SaveAll, Mail,
 } from "lucide-react";
 import { toast } from "sonner";
 import { getISOWeek, startOfISOWeek, format } from "date-fns";
@@ -320,11 +320,15 @@ export default function ZionPage() {
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isFetchingEmails, setIsFetchingEmails] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+
+  const { data: gmailStatus } = trpc.gmail.status.useQuery(undefined, { enabled: isAuthenticated, staleTime: 60_000 });
+  const emailSummaryMutation = trpc.gmail.summarizeToday.useMutation();
 
   const { data: historyData, isLoading: historyLoading } = trpc.zion.history.useQuery(undefined, {
     enabled: isAuthenticated,
@@ -407,6 +411,50 @@ export default function ZionPage() {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendMessage(input);
+    }
+  };
+
+  // ── Email summary (direct action, doesn't go through chat mutation) ──────────
+  const handleEmailSummary = async () => {
+    if (isFetchingEmails || isSending) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Add user-side message instantly
+    const userMsg: Message = {
+      id: `user-emails-${Date.now()}`,
+      role: "user",
+      content: "📧 Summarise my emails from today",
+      createdAt: new Date(),
+    };
+    setMessages(prev => [...prev, userMsg]);
+    setIsFetchingEmails(true);
+
+    try {
+      const result = await emailSummaryMutation.mutateAsync({ date: today });
+      const assistantMsg: Message = {
+        id: `assistant-emails-${Date.now()}`,
+        role: "assistant",
+        content: result.emailCount === 0
+          ? result.summary
+          : `📬 **${result.emailCount} email${result.emailCount > 1 ? "s" : ""} today**\n\n${result.summary}`,
+        createdAt: new Date(),
+      };
+      setMessages(prev => [...prev, assistantMsg]);
+    } catch (err: any) {
+      const msg = err?.message ?? "Could not fetch emails. Please try again.";
+      const needsAuth = msg.includes("Re-authorize") || msg.includes("not yet granted");
+      const assistantMsg: Message = {
+        id: `assistant-emails-err-${Date.now()}`,
+        role: "assistant",
+        content: needsAuth
+          ? `🔐 **Gmail access needed**\n\nI don't have permission to read your emails yet. Head to **Integrations** and click **Re-authorize** under the Gmail section — it only takes a second.\n\n[Open Integrations →](/integrations)`
+          : `⚠️ ${msg}`,
+        createdAt: new Date(),
+      };
+      setMessages(prev => [...prev, assistantMsg]);
+    } finally {
+      setIsFetchingEmails(false);
     }
   };
 
@@ -527,6 +575,20 @@ export default function ZionPage() {
               {c.icon}{c.label}
             </button>
           ))}
+
+          {/* Email summary — direct action chip */}
+          <button
+            onClick={handleEmailSummary}
+            disabled={isFetchingEmails || isSending}
+            title={gmailStatus?.gmailEnabled ? "Summarise today's emails" : "Connect Gmail in Integrations first"}
+            className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border transition-all cursor-pointer select-none active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed bg-red-50 border-red-200 text-red-600 hover:bg-red-100 hover:border-red-300"
+          >
+            {isFetchingEmails
+              ? <Loader2 className="w-3 h-3 animate-spin" />
+              : <Mail className="w-3 h-3" />
+            }
+            {isFetchingEmails ? "Fetching…" : "Emails"}
+          </button>
         </div>
       </div>
 

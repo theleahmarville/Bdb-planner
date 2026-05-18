@@ -53,13 +53,18 @@ export function registerAuthRoutes(app: Express) {
       const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
       const { tokens } = await oauth2Client.getToken(code);
 
+      // Check whether Gmail scope was granted in this auth flow
+      const grantedScopes: string = (tokens.scope as string) ?? "";
+      const hasGmailScope = grantedScopes.includes("gmail");
+
       await db.upsertUserIntegrations(userId, {
         googleAccessToken: tokens.access_token ?? null,
         googleRefreshToken: tokens.refresh_token ?? null,
         googleTokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+        ...(hasGmailScope ? { gmailEnabled: 1 } : {}),
       } as any);
 
-      res.redirect("/integrations?connected=google");
+      res.redirect(hasGmailScope ? "/integrations?connected=google_gmail" : "/integrations?connected=google");
     } catch (error) {
       console.error("[Auth] Google OAuth callback failed:", error);
       res.redirect("/integrations?error=google_auth_failed");

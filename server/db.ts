@@ -147,6 +147,7 @@ export async function ensureSchema(): Promise<void> {
       { table: "social_accounts", column: "engagementRate", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `engagementRate` DECIMAL(5,2) DEFAULT NULL" },
       { table: "social_accounts", column: "contentNiche", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `contentNiche` VARCHAR(100) DEFAULT NULL" },
       { table: "social_accounts", column: "contentGoal", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `contentGoal` VARCHAR(200) DEFAULT NULL" },
+      { table: "user_integrations", column: "gmailEnabled", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `gmailEnabled` TINYINT(1) NOT NULL DEFAULT 0" },
     ];
 
     // Create community tables if they don't exist

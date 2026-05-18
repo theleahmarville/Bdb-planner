@@ -78,7 +78,9 @@
       "WebSearch",
       "WebFetch(domain:railway.com)",
       "WebFetch(domain:base44.com)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(npx vite *)",
+      "Bash(mysql -u root -ppassword bdb_planner -e \"SELECT id, userId, date, desire1 FROM night_reflections WHERE DATE\\(date\\) = CURDATE\\(\\) OR date = '2026-05-13' ORDER BY id DESC LIMIT 5;\")"
     ]
   }
 }

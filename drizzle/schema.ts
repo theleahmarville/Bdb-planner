@@ -274,6 +274,7 @@ export const userIntegrations = mysqlTable("user_integrations", {
   googleRefreshToken: text("googleRefreshToken"),
   googleTokenExpiry: timestamp("googleTokenExpiry"),
   googleCalendarId: varchar("googleCalendarId", { length: 256 }),
+  gmailEnabled: int("gmailEnabled").default(0), // 1 = Gmail scope granted
   // Notion
   notionToken: text("notionToken"),
   notionDatabaseId: varchar("notionDatabaseId", { length: 128 }),
