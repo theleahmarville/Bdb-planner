@@ -18,6 +18,7 @@ import ResetPasswordPage from "./pages/ResetPasswordPage";
 import OnboardingPage from "./pages/OnboardingPage";
 import CommunityPage from "./pages/CommunityPage";
 import DashboardPage from "./pages/DashboardPage";
+import InvitePage from "./pages/InvitePage";
 import PlannerLayout from "./components/PlannerLayout";
 import { useState } from "react";
 import { getISOWeek, getISOWeekYear } from "date-fns";
@@ -32,10 +33,16 @@ function PlannerRouter() {
   const isLogin = location === "/login";
   const isResetPassword = location.startsWith("/reset-password");
   const isOnboarding = location === "/onboarding";
+  const isInvite = location.startsWith("/invite/");
 
   if (isLogin) return <LoginPage />;
   if (isResetPassword) return <ResetPasswordPage />;
   if (isOnboarding) return <OnboardingPage />;
+  if (isInvite) return (
+    <Switch>
+      <Route path="/invite/:token" component={InvitePage} />
+    </Switch>
+  );
   if (isHome) return <Home />;
 
 

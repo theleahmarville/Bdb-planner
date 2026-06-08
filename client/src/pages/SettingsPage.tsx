@@ -1,12 +1,13 @@
 import { useState, useRef } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import {
-  Eye, EyeOff, User, Lock, LogOut, Camera, Globe, Clock, Loader2, X, Bell, Mail,
+  Eye, EyeOff, User, Lock, LogOut, Camera, Globe, Clock, Loader2, X, Bell, Mail, Link, Copy, Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
@@ -77,6 +78,33 @@ function PushNotificationToggle() {
 export default function SettingsPage() {
   const { user, refresh, logout } = useAuth();
   const anyUser = user as any;
+  const isAdmin = anyUser?.role === "admin";
+
+  // ── Invite ─────────────────────────────────────────────────────────────────
+  const createInviteMutation = trpc.invite.create.useMutation();
+  const [inviteLink, setInviteLink] = useState("");
+  const [generatingInvite, setGeneratingInvite] = useState(false);
+  const [inviteCopied, setInviteCopied] = useState(false);
+
+  const handleGenerateInvite = async () => {
+    setGeneratingInvite(true);
+    try {
+      const { token } = await createInviteMutation.mutateAsync({ role: "user" });
+      const url = `${window.location.origin}/invite/${token}`;
+      setInviteLink(url);
+    } catch {
+      toast.error("Failed to generate invite link.");
+    } finally {
+      setGeneratingInvite(false);
+    }
+  };
+
+  const handleCopyInvite = async () => {
+    await navigator.clipboard.writeText(inviteLink);
+    setInviteCopied(true);
+    toast.success("Invite link copied!");
+    setTimeout(() => setInviteCopied(false), 2500);
+  };
 
   // ── Avatar ─────────────────────────────────────────────────────────────────
   const [avatarPreview, setAvatarPreview] = useState<string | null>(anyUser?.avatarUrl || null);
@@ -551,6 +579,56 @@ export default function SettingsPage() {
           </Button>
         </form>
       </div>
+
+      {/* ── Invite collaborator (admin only) ──────────────────────────────────── */}
+      {isAdmin && (
+        <div className="planner-card mb-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-9 h-9 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+              <Link size={16} className="text-emerald-600" />
+            </div>
+            <div>
+              <h2 className="font-bold text-base">Invite a collaborator</h2>
+              <p className="text-xs text-muted-foreground">Generate a one-time link valid for 7 days.</p>
+            </div>
+          </div>
+
+          <Button
+            onClick={handleGenerateInvite}
+            disabled={generatingInvite}
+            size="sm"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+          >
+            {generatingInvite
+              ? <><Loader2 size={14} className="mr-1.5 animate-spin" />Generating…</>
+              : <><Link size={14} className="mr-1.5" />Generate Invite Link</>
+            }
+          </Button>
+
+          {inviteLink && (
+            <div className="mt-4 space-y-2">
+              <p className="text-xs text-muted-foreground font-medium">Share this link — it expires in 7 days:</p>
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  value={inviteLink}
+                  className="flex-1 border border-border rounded-lg px-3 py-2 text-xs font-mono bg-muted/40 focus:outline-none truncate"
+                  onFocus={(e) => e.target.select()}
+                />
+                <Button size="sm" variant="outline" onClick={handleCopyInvite} className="shrink-0">
+                  {inviteCopied
+                    ? <><Check size={14} className="mr-1 text-emerald-600" />Copied</>
+                    : <><Copy size={14} className="mr-1" />Copy</>
+                  }
+                </Button>
+              </div>
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                ⚠️ Anyone with this link can create an account. Don't share publicly.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Danger zone ───────────────────────────────────────────────────────── */}
       <div className="planner-card border-red-100">

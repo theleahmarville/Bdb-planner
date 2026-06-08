@@ -67,8 +67,12 @@ import {
   savePushSubscription,
   deletePushSubscription,
   getUserPushSubscriptions,
+  getUserByEmail,
+  upsertUser,
 } from "./db";
 import bcrypt from "bcryptjs";
+import { SignJWT, jwtVerify } from "jose";
+import { nanoid } from "nanoid";
 
 // ─── Shared validators ────────────────────────────────────────────────────────
 const zYear = z.number().int().min(2020).max(2030);
@@ -2100,6 +2104,90 @@ const pushRouter = router({
 });
 
 // ─── App Router ───────────────────────────────────────────────────────────────
+// ─── Invite Router ───────────────────────────────────────────────────────────
+const inviteRouter = router({
+  // Admin-only: generate a one-time invite link token (7-day expiry)
+  create: protectedProcedure
+    .input(z.object({ role: z.enum(["user", "admin"]).default("user") }))
+    .mutation(async ({ ctx, input }) => {
+      const admin = await isUserAdmin(ctx.user.id);
+      if (!admin) throw new Error("Unauthorized");
+      const secret = new TextEncoder().encode(process.env.JWT_SECRET || "fallback-secret");
+      const token = await new SignJWT({ type: "invite", role: input.role, nonce: nanoid(8) })
+        .setProtectedHeader({ alg: "HS256" })
+        .setExpirationTime("7d")
+        .sign(secret);
+      return { token };
+    }),
+
+  // Public: validate an invite token before showing the registration form
+  validate: publicProcedure
+    .input(z.object({ token: z.string() }))
+    .query(async ({ input }) => {
+      try {
+        const secret = new TextEncoder().encode(process.env.JWT_SECRET || "fallback-secret");
+        const { payload } = await jwtVerify(input.token, secret);
+        if (payload.type !== "invite") return { valid: false };
+        return { valid: true, role: payload.role as string };
+      } catch {
+        return { valid: false };
+      }
+    }),
+
+  // Public: register using a valid invite token
+  register: publicProcedure
+    .input(z.object({
+      token: z.string(),
+      name: z.string().min(1).max(100),
+      email: z.string().email(),
+      password: z.string().min(8),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      // Validate token first
+      const secret = new TextEncoder().encode(process.env.JWT_SECRET || "fallback-secret");
+      let role = "user";
+      try {
+        const { payload } = await jwtVerify(input.token, secret);
+        if (payload.type !== "invite") throw new Error("Invalid invite");
+        role = (payload.role as string) ?? "user";
+      } catch {
+        throw new Error("This invite link is invalid or has expired.");
+      }
+
+      const existing = await getUserByEmail(input.email.toLowerCase());
+      if (existing) throw new Error("An account with this email already exists.");
+
+      const passwordHash = await bcrypt.hash(input.password, 12);
+      const openId = nanoid(21);
+      await upsertUser({
+        openId,
+        name: input.name.trim(),
+        email: input.email.toLowerCase(),
+        passwordHash,
+        loginMethod: "email",
+        role: role as "user" | "admin",
+        lastSignedIn: new Date(),
+      } as any);
+
+      const user = await getUserByEmail(input.email.toLowerCase());
+      if (!user) throw new Error("Failed to create account.");
+
+      const { authService } = await import("./_core/sdk");
+      const { ONE_YEAR_MS } = await import("@shared/const");
+      const { getSessionCookieOptions } = await import("./_core/cookies");
+      const { COOKIE_NAME } = await import("@shared/const");
+
+      const sessionToken = await authService.createSessionToken(
+        { id: user.id, openId: user.openId, name: user.name },
+        { expiresInMs: ONE_YEAR_MS }
+      );
+      const cookieOptions = getSessionCookieOptions(ctx.req);
+      ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+
+      return { success: true, user: { id: user.id, name: user.name, email: user.email } };
+    }),
+});
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -2135,5 +2223,6 @@ export const appRouter = router({
   }),
   community: communityRouter,
   push: pushRouter,
+  invite: inviteRouter,
 });
 export type AppRouter = typeof appRouter;
