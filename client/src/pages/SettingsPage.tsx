@@ -80,30 +80,30 @@ export default function SettingsPage() {
   const anyUser = user as any;
   const isAdmin = anyUser?.role === "admin";
 
-  // ── Invite ─────────────────────────────────────────────────────────────────
-  const createInviteMutation = trpc.invite.create.useMutation();
-  const [inviteLink, setInviteLink] = useState("");
-  const [generatingInvite, setGeneratingInvite] = useState(false);
-  const [inviteCopied, setInviteCopied] = useState(false);
+  // ── Share access link ──────────────────────────────────────────────────────
+  const generateAccessLinkMutation = trpc.invite.generateAccessLink.useMutation();
+  const [accessLink, setAccessLink] = useState("");
+  const [generatingAccess, setGeneratingAccess] = useState(false);
+  const [accessCopied, setAccessCopied] = useState(false);
 
-  const handleGenerateInvite = async () => {
-    setGeneratingInvite(true);
+  const handleGenerateAccessLink = async () => {
+    setGeneratingAccess(true);
     try {
-      const { token } = await createInviteMutation.mutateAsync({ role: "user" });
-      const url = `${window.location.origin}/invite/${token}`;
-      setInviteLink(url);
+      const { token } = await generateAccessLinkMutation.mutateAsync();
+      const url = `${window.location.origin}/api/auth/access/${token}`;
+      setAccessLink(url);
     } catch {
-      toast.error("Failed to generate invite link.");
+      toast.error("Failed to generate access link.");
     } finally {
-      setGeneratingInvite(false);
+      setGeneratingAccess(false);
     }
   };
 
-  const handleCopyInvite = async () => {
-    await navigator.clipboard.writeText(inviteLink);
-    setInviteCopied(true);
-    toast.success("Invite link copied!");
-    setTimeout(() => setInviteCopied(false), 2500);
+  const handleCopyAccess = async () => {
+    await navigator.clipboard.writeText(accessLink);
+    setAccessCopied(true);
+    toast.success("Link copied!");
+    setTimeout(() => setAccessCopied(false), 2500);
   };
 
   // ── Avatar ─────────────────────────────────────────────────────────────────
@@ -580,7 +580,7 @@ export default function SettingsPage() {
         </form>
       </div>
 
-      {/* ── Invite collaborator (admin only) ──────────────────────────────────── */}
+      {/* ── Share access link (admin only) ────────────────────────────────────── */}
       {isAdmin && (
         <div className="planner-card mb-6">
           <div className="flex items-center gap-3 mb-4">
@@ -588,42 +588,42 @@ export default function SettingsPage() {
               <Link size={16} className="text-emerald-600" />
             </div>
             <div>
-              <h2 className="font-bold text-base">Invite a collaborator</h2>
-              <p className="text-xs text-muted-foreground">Generate a one-time link valid for 7 days.</p>
+              <h2 className="font-bold text-base">Share app access</h2>
+              <p className="text-xs text-muted-foreground">Anyone with the link can view the app — no sign-up needed. Valid 30 days.</p>
             </div>
           </div>
 
           <Button
-            onClick={handleGenerateInvite}
-            disabled={generatingInvite}
+            onClick={handleGenerateAccessLink}
+            disabled={generatingAccess}
             size="sm"
             className="bg-emerald-600 hover:bg-emerald-700 text-white"
           >
-            {generatingInvite
+            {generatingAccess
               ? <><Loader2 size={14} className="mr-1.5 animate-spin" />Generating…</>
-              : <><Link size={14} className="mr-1.5" />Generate Invite Link</>
+              : <><Link size={14} className="mr-1.5" />Generate Access Link</>
             }
           </Button>
 
-          {inviteLink && (
+          {accessLink && (
             <div className="mt-4 space-y-2">
-              <p className="text-xs text-muted-foreground font-medium">Share this link — it expires in 7 days:</p>
+              <p className="text-xs text-muted-foreground font-medium">Send this link — they click it and they're in:</p>
               <div className="flex items-center gap-2">
                 <input
                   readOnly
-                  value={inviteLink}
+                  value={accessLink}
                   className="flex-1 border border-border rounded-lg px-3 py-2 text-xs font-mono bg-muted/40 focus:outline-none truncate"
                   onFocus={(e) => e.target.select()}
                 />
-                <Button size="sm" variant="outline" onClick={handleCopyInvite} className="shrink-0">
-                  {inviteCopied
+                <Button size="sm" variant="outline" onClick={handleCopyAccess} className="shrink-0">
+                  {accessCopied
                     ? <><Check size={14} className="mr-1 text-emerald-600" />Copied</>
                     : <><Copy size={14} className="mr-1" />Copy</>
                   }
                 </Button>
               </div>
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                ⚠️ Anyone with this link can create an account. Don't share publicly.
+                ⚠️ Anyone with this link can access the app. Don't post it publicly.
               </p>
             </div>
           )}

@@ -71,6 +71,49 @@ export function registerAuthRoutes(app: Express) {
     }
   });
 
+  // GET /api/auth/access/:token — magic link: auto-creates a viewer session
+  app.get("/api/auth/access/:token", async (req: Request, res: Response) => {
+    const { token } = req.params;
+    try {
+      const secret = new TextEncoder().encode(process.env.JWT_SECRET || "fallback-secret");
+      const { payload } = await jwtVerify(token, secret);
+      if (payload.type !== "magic_access") {
+        res.redirect("/?error=invalid_link");
+        return;
+      }
+
+      // Find or create the shared viewer account
+      const viewerEmail = "viewer@bdbplanner.internal";
+      let viewer = await db.getUserByEmail(viewerEmail);
+      if (!viewer) {
+        const { nanoid } = await import("nanoid");
+        await db.upsertUser({
+          openId: `viewer-${nanoid(8)}`,
+          name: "Viewer",
+          email: viewerEmail,
+          loginMethod: "email",
+          role: "user",
+          lastSignedIn: new Date(),
+        } as any);
+        viewer = await db.getUserByEmail(viewerEmail);
+      }
+      if (!viewer) {
+        res.redirect("/?error=viewer_setup_failed");
+        return;
+      }
+
+      const sessionToken = await authService.createSessionToken(
+        { id: viewer.id, openId: viewer.openId, name: viewer.name },
+        { expiresInMs: ONE_YEAR_MS }
+      );
+      const cookieOptions = getSessionCookieOptions(req);
+      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+      res.redirect("/dashboard");
+    } catch {
+      res.redirect("/?error=invalid_link");
+    }
+  });
+
   // POST /api/auth/dev-login — instant login for development only
   app.post("/api/auth/dev-login", async (req: Request, res: Response) => {
     if (process.env.NODE_ENV !== "development") {

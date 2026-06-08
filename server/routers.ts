@@ -2106,6 +2106,19 @@ const pushRouter = router({
 // ─── App Router ───────────────────────────────────────────────────────────────
 // ─── Invite Router ───────────────────────────────────────────────────────────
 const inviteRouter = router({
+  // Admin-only: generate a shareable magic-access link (no sign-up needed)
+  generateAccessLink: protectedProcedure
+    .mutation(async ({ ctx }) => {
+      const admin = await isUserAdmin(ctx.user.id);
+      if (!admin) throw new Error("Unauthorized");
+      const secret = new TextEncoder().encode(process.env.JWT_SECRET || "fallback-secret");
+      const token = await new SignJWT({ type: "magic_access", nonce: nanoid(8) })
+        .setProtectedHeader({ alg: "HS256" })
+        .setExpirationTime("30d")
+        .sign(secret);
+      return { token };
+    }),
+
   // Admin-only: generate a one-time invite link token (7-day expiry)
   create: protectedProcedure
     .input(z.object({ role: z.enum(["user", "admin"]).default("user") }))
