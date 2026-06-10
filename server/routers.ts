@@ -1539,6 +1539,125 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
         }
       }
     }),
+
+  // ── Chief of Staff: structured daily briefing ────────────────────────────
+  chiefOfStaff: protectedProcedure
+    .input(z.object({ date: zDate.optional(), includeEmails: z.boolean().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.user.id;
+      const today = input.date ?? new Date().toISOString().slice(0, 10);
+      const todayDate = new Date(today + "T12:00:00Z");
+      const dayNames = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+      const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+      const dayName = dayNames[todayDate.getUTCDay()];
+      const dateLabel = `${dayName}, ${monthNames[todayDate.getUTCMonth()]} ${todayDate.getUTCDate()}, ${todayDate.getUTCFullYear()}`;
+
+      // Gather planner data
+      const context = await getUserPlannerContext(userId);
+      const todayEntry = context.recentDailyEntries.find((e: any) => e.date === today);
+      const upcomingReminders = context.upcomingReminders.slice(0, 5);
+
+      // Weekly priorities & schedule
+      const weeklyPlan = context.weeklyPlan as any;
+      const priorities: string[] = [];
+      const schedule: string[] = [];
+      if (weeklyPlan) {
+        const dayKey = dayName.toLowerCase();
+        const slots = weeklyPlan[dayKey] ?? {};
+        Object.entries(slots).forEach(([time, val]: any) => {
+          if (val?.name) schedule.push(`${time}: ${val.name}`);
+        });
+        const weekPriorities = weeklyPlan.priorities ?? [];
+        weekPriorities.slice(0, 3).forEach((p: any) => {
+          if (p?.text) priorities.push(p.text);
+        });
+      }
+
+      // Today's tasks from daily entry
+      const todayTasks: string[] = [];
+      if (todayEntry) {
+        const tasks = (todayEntry as any).tasks ?? [];
+        tasks.slice(0, 5).forEach((t: any) => { if (t?.text) todayTasks.push(t.text); });
+      }
+
+      // Optionally fetch emails
+      let emailContext = "";
+      if (input.includeEmails) {
+        try {
+          const integration = await getUserIntegrations(userId);
+          if (integration?.gmailEnabled && integration.googleAccessToken) {
+            const { google } = await import("googleapis");
+            const oauth2Client = new google.auth.OAuth2(
+              process.env.GOOGLE_CLIENT_ID,
+              process.env.GOOGLE_CLIENT_SECRET,
+              process.env.GOOGLE_REDIRECT_URI
+            );
+            oauth2Client.setCredentials({
+              access_token: integration.googleAccessToken,
+              refresh_token: integration.googleRefreshToken ?? undefined,
+            });
+            const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+            const nextDay = new Date(todayDate); nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+            const q = `after:${today.replace(/-/g, "/")} before:${nextDay.toISOString().slice(0,10).replace(/-/g,"/")} -category:promotions -category:social`;
+            const listRes = await gmail.users.messages.list({ userId: "me", q, maxResults: 10 });
+            const msgs = listRes.data.messages ?? [];
+            if (msgs.length > 0) {
+              const details = await Promise.all(msgs.slice(0, 8).map(async (m) => {
+                try {
+                  const d = await gmail.users.messages.get({ userId: "me", id: m.id!, format: "metadata", metadataHeaders: ["Subject","From"] });
+                  const h = d.data.payload?.headers ?? [];
+                  return `- ${h.find((x:any) => x.name==="From")?.value ?? "?"}: ${h.find((x:any) => x.name==="Subject")?.value ?? "(no subject)"}`;
+                } catch { return null; }
+              }));
+              emailContext = `\n\nEmails today (${msgs.length}):\n${details.filter(Boolean).join("\n")}`;
+            }
+          }
+        } catch { /* email fetch is best-effort */ }
+      }
+
+      // Build AI prompt
+      const bigGoals = (context.bigGoals as any[]).slice(0, 5).map((g: any) => g.title).filter(Boolean);
+      const reminderLines = upcomingReminders.map((r: any) => `- ${r.title}${r.reminderAt ? ` (${new Date(r.reminderAt).toLocaleDateString()})` : ""}`).join("\n");
+
+      const prompt = `You are Zion, acting as an elite Chief of Staff giving a sharp, warm morning briefing.
+
+Today: ${dateLabel}
+Big Goals: ${bigGoals.join(", ") || "None set"}
+Today's schedule slots: ${schedule.length ? schedule.join(", ") : "No scheduled items"}
+Weekly priorities: ${priorities.length ? priorities.join(", ") : "None set"}
+Today's tasks: ${todayTasks.length ? todayTasks.join(", ") : "None set"}
+Upcoming reminders: ${reminderLines || "None"}${emailContext}
+
+Write a structured briefing with these EXACT sections (use these exact headers):
+
+## Good Morning
+One warm, motivating sentence personalized to today and what's on the schedule.
+
+## Today's Focus
+3 bullet points — the most important things to accomplish today based on the data above.
+
+## Your Schedule
+List today's scheduled items. If empty, suggest 2-3 time blocks based on priorities.
+
+## On Your Radar
+Up to 3 upcoming reminders or important things to keep in mind this week.
+
+## Zion's Insight
+One strategic observation or encouragement based on the overall picture. Be specific, not generic.
+
+Keep each section tight — max 3-4 bullet points. Tone: warm, direct, executive.`;
+
+      const { invokeLLM } = await import("./_core/llm");
+      const result = await invokeLLM({
+        model: "claude-opus-4-5",
+        max_tokens: 900,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      const rawContent = result.choices?.[0]?.message?.content;
+      const briefing = typeof rawContent === "string" ? rawContent : "Could not generate briefing.";
+      return { briefing, dateLabel, hasEmails: !!emailContext };
+    }),
 });
 
 // ─── Daily Devotion Router ──────────────────────────────────────────────────
