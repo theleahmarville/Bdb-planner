@@ -60,6 +60,13 @@ export default function DashboardPage() {
   const checkInMutation = trpc.community.checkIn.useMutation({
     onSuccess: () => { refetchCheckIn(); toast.success("Check-in saved!"); },
   });
+  const { data: streakData } = trpc.zion.streak.useQuery(undefined, { staleTime: 60_000 });
+  const notifyStreakMutation = trpc.zion.checkAndNotifyStreak.useMutation();
+
+  // On mount: silently check if streak was broken and queue a Zion note
+  useEffect(() => {
+    notifyStreakMutation.mutate();
+  }, []);
 
   // ── greeting ──────────────────────────────────────────────────────────────
   const timeSlot =
@@ -186,7 +193,106 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── 2: Daily Devotion ─────────────────────────────────────────────── */}
+      {/* ── 2: Streak Counter ─────────────────────────────────────────────── */}
+      {streakData !== undefined && (
+        <div
+          onClick={() => navigate("/zion")}
+          className={cn(
+            "planner-card cursor-pointer hover:shadow-md transition-all group",
+            streakData.currentStreak === 0
+              ? "border-amber-200 bg-amber-50/40"
+              : streakData.currentStreak >= 7
+              ? "border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50"
+              : "border-emerald-200 bg-gradient-to-r from-emerald-50 to-green-50"
+          )}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {/* Flame icon — grows with streak */}
+              <div className={cn(
+                "w-12 h-12 rounded-xl flex items-center justify-center text-2xl shrink-0 transition-transform group-hover:scale-110",
+                streakData.currentStreak === 0 ? "bg-amber-100" :
+                streakData.currentStreak >= 30 ? "bg-orange-500 shadow-lg shadow-orange-200" :
+                streakData.currentStreak >= 7 ? "bg-orange-400 shadow-md shadow-orange-100" :
+                "bg-emerald-100"
+              )}>
+                {streakData.currentStreak === 0 ? "💤" :
+                 streakData.currentStreak >= 30 ? "🔥" :
+                 streakData.currentStreak >= 7 ? "🔥" : "✨"}
+              </div>
+              <div>
+                <div className="flex items-baseline gap-1.5">
+                  <span className={cn(
+                    "text-3xl font-black",
+                    streakData.currentStreak === 0 ? "text-amber-600" :
+                    streakData.currentStreak >= 7 ? "text-orange-600" : "text-emerald-700"
+                  )}>
+                    {streakData.currentStreak}
+                  </span>
+                  <span className="text-sm font-semibold text-muted-foreground">
+                    day{streakData.currentStreak !== 1 ? "s" : ""} in a row
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {streakData.currentStreak === 0
+                    ? streakData.lastActiveDate
+                      ? "You missed yesterday — today's the perfect day to restart 💛"
+                      : "Start your streak today — open the planner and get to work ✨"
+                    : streakData.currentStreak === 1
+                    ? "Great start! Show up again tomorrow to build momentum 💪"
+                    : streakData.currentStreak < 7
+                    ? `Keep going — ${7 - streakData.currentStreak} more day${7 - streakData.currentStreak !== 1 ? "s" : ""} to your first week streak 🎯`
+                    : streakData.currentStreak < 30
+                    ? `You're on a roll! Don't break the chain 🔥`
+                    : `Legendary consistency — ${streakData.currentStreak} days strong! 🏆`
+                  }
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col items-end gap-1 shrink-0">
+              {streakData.longestStreak > 0 && (
+                <div className="text-right">
+                  <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Best</p>
+                  <p className="text-sm font-bold text-muted-foreground">{streakData.longestStreak}d</p>
+                </div>
+              )}
+              {streakData.isActiveToday && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-100 rounded-full px-2 py-0.5">
+                  <CheckCircle2 size={10} /> Today ✓
+                </span>
+              )}
+              <ChevronRight size={14} className="text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+            </div>
+          </div>
+
+          {/* Milestone badges */}
+          {streakData.currentStreak >= 3 && (
+            <div className="mt-3 pt-3 border-t border-current/5 flex gap-2 flex-wrap">
+              {[
+                { days: 3, label: "3-day", emoji: "⚡" },
+                { days: 7, label: "Week", emoji: "🗓️" },
+                { days: 14, label: "2 Weeks", emoji: "💪" },
+                { days: 30, label: "Month", emoji: "🏆" },
+              ].map(({ days, label, emoji }) => (
+                <div
+                  key={days}
+                  className={cn(
+                    "text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1",
+                    streakData.currentStreak >= days
+                      ? "bg-orange-100 text-orange-700"
+                      : "bg-muted/50 text-muted-foreground/40"
+                  )}
+                >
+                  {emoji} {label}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Daily Devotion ────────────────────────────────────────────────── */}
       {devotion && !devotion.dismissed && (
         <div className="planner-card relative overflow-hidden border-0"
           style={{ background: "linear-gradient(135deg,#1a1230 0%,#2d1f4e 100%)" }}>

@@ -69,6 +69,8 @@ import {
   getUserPushSubscriptions,
   getUserByEmail,
   upsertUser,
+  getUserStreak,
+  getLastStreakNotification,
 } from "./db";
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
@@ -1539,6 +1541,39 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
         }
       }
     }),
+
+  // ── Streak: how many consecutive days has the user shown up ──────────────
+  streak: protectedProcedure.query(async ({ ctx }) => {
+    return getUserStreak(ctx.user.id);
+  }),
+
+  // ── Check streak & send Zion miss-notification if broken ─────────────────
+  checkAndNotifyStreak: protectedProcedure.mutation(async ({ ctx }) => {
+    const streak = await getUserStreak(ctx.user.id);
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Only send a notification if the streak is broken AND we haven't sent one today
+    if (!streak.streakBroken) return { notified: false, streak };
+    const lastNotified = await getLastStreakNotification(ctx.user.id);
+    if (lastNotified === today) return { notified: false, streak };
+
+    // Build the encouragement message
+    const messages = [
+      `Hey, I noticed you missed a day — and that's okay. 💛 Every comeback is a story worth telling. Your streak is ready to be rebuilt, starting right now. What's one thing you want to get done today?`,
+      `Life happened — no judgment here. 🌱 The fact that you're back means everything. You don't need a perfect streak; you need a persistent one. Let's go again. What's on your mind today?`,
+      `Missed a day? No big deal — the work doesn't disappear, and neither does your potential. 🔥 The best thing you can do is show up today. Even 10 minutes counts. What would you like to tackle?`,
+    ];
+    const msg = messages[Math.floor(Math.random() * messages.length)];
+
+    await saveZionMessage({
+      userId: ctx.user.id,
+      role: "assistant",
+      content: `## Your streak was broken — but you're back! 💪\n\n${msg}`,
+      metadata: JSON.stringify({ type: "streak_break_notification" }),
+    });
+
+    return { notified: true, streak };
+  }),
 
   // ── Chief of Staff: structured daily briefing ────────────────────────────
   chiefOfStaff: protectedProcedure

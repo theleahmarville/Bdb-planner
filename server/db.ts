@@ -1769,3 +1769,100 @@ export async function getAllPushSubscriptionsForReminders(): Promise<Array<{
     conn.release();
   }
 }
+
+// ─── Streak tracking ──────────────────────────────────────────────────────────
+export async function getUserStreak(userId: number): Promise<{
+  currentStreak: number;
+  longestStreak: number;
+  lastActiveDate: string | null;
+  isActiveToday: boolean;
+  streakBroken: boolean; // true if yesterday was missed but user WAS active before
+}> {
+  const pool = getPool();
+  const empty = { currentStreak: 0, longestStreak: 0, lastActiveDate: null, isActiveToday: false, streakBroken: false };
+  if (!pool) return empty;
+  const conn = await pool.getConnection();
+  try {
+    // Collect all distinct dates with any user activity in last 365 days
+    const [rows] = await conn.query(`
+      SELECT activity_date FROM (
+        SELECT DATE(createdAt) AS activity_date
+          FROM zion_messages WHERE userId = ? AND role = 'user'
+        UNION
+        SELECT date AS activity_date
+          FROM daily_entries WHERE userId = ?
+        UNION
+        SELECT date AS activity_date
+          FROM daily_check_ins WHERE userId = ?
+      ) AS combined
+      WHERE activity_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+      GROUP BY activity_date
+      ORDER BY activity_date DESC
+    `, [userId, userId, userId]);
+
+    const dates: string[] = (rows as any[]).map(r => {
+      const d = r.activity_date;
+      if (d instanceof Date) return d.toISOString().slice(0, 10);
+      return String(d);
+    });
+
+    if (dates.length === 0) return empty;
+
+    const dateSet = new Set(dates);
+    const today = new Date();
+    const todayStr = today.toISOString().slice(0, 10);
+    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+    const isActiveToday = dateSet.has(todayStr);
+    const lastActiveDate = dates[0]; // most recent
+
+    // Current streak: walk backwards from today (or yesterday if not active today)
+    let currentStreak = 0;
+    const cursor = new Date(today);
+    if (!isActiveToday) cursor.setDate(cursor.getDate() - 1);
+    for (let i = 0; i < 365; i++) {
+      const ds = cursor.toISOString().slice(0, 10);
+      if (dateSet.has(ds)) { currentStreak++; cursor.setDate(cursor.getDate() - 1); }
+      else break;
+    }
+
+    // Streak is broken if user was active at some point but missed yesterday (and today too)
+    const streakBroken = currentStreak === 0 && lastActiveDate !== null && !dateSet.has(yesterdayStr) && !isActiveToday;
+
+    // Longest streak (all-time)
+    const sorted = Array.from(dateSet).sort();
+    let longest = 0, temp = 1;
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = new Date(sorted[i - 1] + "T12:00:00Z");
+      const curr = new Date(sorted[i] + "T12:00:00Z");
+      const diff = Math.round((curr.getTime() - prev.getTime()) / 86400000);
+      if (diff === 1) { temp++; } else { longest = Math.max(longest, temp); temp = 1; }
+    }
+    longest = Math.max(longest, temp);
+
+    return { currentStreak, longestStreak: longest, lastActiveDate, isActiveToday, streakBroken };
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getLastStreakNotification(userId: number): Promise<string | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT DATE(createdAt) as d FROM zion_messages
+       WHERE userId = ? AND role = 'assistant' AND content LIKE '%streak%' AND content LIKE '%missed%'
+       ORDER BY createdAt DESC LIMIT 1`,
+      [userId]
+    );
+    const row = (rows as any[])[0];
+    if (!row?.d) return null;
+    const d = row.d instanceof Date ? row.d.toISOString().slice(0, 10) : String(row.d);
+    return d;
+  } finally {
+    conn.release();
+  }
+}
