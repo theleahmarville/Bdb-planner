@@ -544,7 +544,7 @@ const socialAccountsRouter = router({
 
   getContentStrategy: protectedProcedure
     .input(z.object({
-      weeklyPosts: z.record(z.string()).optional(),
+      weeklyPosts: z.record(z.string(), z.string()).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const accounts = await getSocialAccounts(ctx.user.id);
@@ -571,7 +571,7 @@ const socialAccountsRouter = router({
 
       const postsSummary = input.weeklyPosts
         ? Object.entries(input.weeklyPosts)
-            .filter(([, v]) => v?.trim())
+            .filter(([, v]) => (v as string)?.trim())
             .map(([k, v]) => `- ${k}: ${v}`)
             .join("\n")
         : "No posts planned yet this week";
@@ -1684,7 +1684,6 @@ Keep each section tight — max 3-4 bullet points. Tone: warm, direct, executive
 
       const { invokeLLM } = await import("./_core/llm");
       const result = await invokeLLM({
-        model: "claude-opus-4-5",
         max_tokens: 900,
         messages: [{ role: "user", content: prompt }],
       });
@@ -2117,15 +2116,13 @@ const gmailRouter = router({
       const validEmails = emailDetails.filter(Boolean) as { subject: string; from: string; snippet: string }[];
 
       // Use Claude to summarise
-      const Anthropic = (await import("@anthropic-ai/sdk")).default;
-      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const { invokeLLM: invokeLLMGmail } = await import("./_core/llm");
 
       const emailsText = validEmails.map((e, i) =>
         `${i + 1}. From: ${e.from}\n   Subject: ${e.subject}\n   Preview: ${e.snippet}`
       ).join("\n\n");
 
-      const response = await anthropic.messages.create({
-        model: "claude-opus-4-5",
+      const gmailResult = await invokeLLMGmail({
         max_tokens: 800,
         messages: [{
           role: "user",
@@ -2135,7 +2132,8 @@ ${emailsText}`,
         }],
       });
 
-      const summary = response.content[0].type === "text" ? response.content[0].text : "Could not generate summary.";
+      const rawSummary = gmailResult.choices?.[0]?.message?.content;
+      const summary = typeof rawSummary === "string" && rawSummary ? rawSummary : "Could not generate summary.";
 
       return {
         summary,
