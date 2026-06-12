@@ -28,7 +28,7 @@ import {
   sendHabitNudgeEmail,
 } from "./_core/email";
 
-const TZ = process.env.SCHEDULER_TIMEZONE || "America/Barbados";
+const TZ = process.env.SCHEDULER_TIMEZONE || "America/Los_Angeles";
 
 // ─── Shared: build a planner-context string for LLM prompts ──────────────────
 
