@@ -9,7 +9,7 @@ import {
   Sparkles, Mic, MicOff, Send, Trash2, CheckCircle2,
   Calendar, Target, BookOpen, Heart, BarChart2, Loader2,
   Volume2, ChevronDown, Bell, DollarSign, Share2, Smile,
-  ExternalLink, SaveAll,
+  ExternalLink, SaveAll, Brain, X as XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { getISOWeek, startOfISOWeek, format } from "date-fns";
@@ -333,6 +333,9 @@ export default function ZionPage() {
   const chatMutation = trpc.zion.chat.useMutation();
   const clearMutation = trpc.zion.clearHistory.useMutation();
   const transcribeMutation = trpc.zion.transcribeVoice.useMutation();
+  const [showMemory, setShowMemory] = useState(false);
+  const { data: memories = [], refetch: refetchMemories } = trpc.zion.getMemories.useQuery(undefined, { enabled: showMemory });
+  const deleteMemoryMutation = trpc.zion.deleteMemory.useMutation({ onSuccess: () => refetchMemories() });
   const utils = trpc.useUtils();
 
   useEffect(() => {
@@ -527,8 +530,68 @@ export default function ZionPage() {
               {c.icon}{c.label}
             </button>
           ))}
+          {/* Memory chip */}
+          <button
+            onClick={() => setShowMemory(v => !v)}
+            className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border transition-all cursor-pointer select-none ${
+              showMemory
+                ? "bg-violet-100 border-violet-300 text-violet-700"
+                : "bg-white border-[#e8e0d5] text-[#8a7a6a] hover:bg-violet-50 hover:border-violet-200 hover:text-violet-600"
+            }`}
+          >
+            <Brain className="w-3 h-3" />Memory
+          </button>
         </div>
       </div>
+
+      {/* Memory panel */}
+      {showMemory && (
+        <div className="mx-4 mb-2 rounded-2xl border border-violet-200 bg-violet-50/60 overflow-hidden shrink-0">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-violet-200">
+            <div className="flex items-center gap-2">
+              <Brain className="w-3.5 h-3.5 text-violet-600" />
+              <p className="text-xs font-bold text-violet-800">What Zion Remembers About You</p>
+            </div>
+            <button onClick={() => setShowMemory(false)} className="text-violet-400 hover:text-violet-700">
+              <XIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="max-h-48 overflow-y-auto p-2 space-y-1.5">
+            {memories.length === 0 ? (
+              <p className="text-[11px] text-center text-violet-400 py-3">
+                No memories yet — Zion learns from your conversations over time.
+              </p>
+            ) : (
+              memories.map(m => (
+                <div key={m.key_name} className="flex items-start gap-2 group">
+                  <div className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 mt-0.5 ${
+                    m.category === "preference" ? "bg-emerald-100 text-emerald-700" :
+                    m.category === "pattern"    ? "bg-blue-100 text-blue-700" :
+                    m.category === "insight"    ? "bg-amber-100 text-amber-700" :
+                    "bg-gray-100 text-gray-600"
+                  }`}>{m.category}</div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] text-violet-900 leading-relaxed">{m.value}</p>
+                    <p className="text-[9px] text-violet-400">{m.key_name}</p>
+                  </div>
+                  <button
+                    onClick={() => deleteMemoryMutation.mutate({ keyName: m.key_name })}
+                    className="opacity-0 group-hover:opacity-100 text-violet-300 hover:text-red-500 transition-all shrink-0 mt-0.5"
+                    title="Forget this"
+                  >
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="px-3 py-1.5 border-t border-violet-200 bg-violet-100/50">
+            <p className="text-[9px] text-violet-400 text-center">
+              Zion learns from your conversations. Hover a memory to delete it.
+            </p>
+          </div>
+        </div>
+      )}
 
 
       {/* Messages */}

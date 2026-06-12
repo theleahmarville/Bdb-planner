@@ -188,6 +188,37 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // Zion memory table — stores learned preferences, patterns, insights
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`zion_memory\` (
+        \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\` INT NOT NULL,
+        \`category\` ENUM('preference','pattern','insight','fact') NOT NULL DEFAULT 'fact',
+        \`key_name\` VARCHAR(255) NOT NULL,
+        \`value\` TEXT NOT NULL,
+        \`confidence\` FLOAT DEFAULT 1.0,
+        \`observedCount\` INT DEFAULT 1,
+        \`lastObservedAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY \`uq_user_key\` (\`userId\`, \`key_name\`(200)),
+        INDEX \`idx_user\` (\`userId\`)
+      )
+    `);
+
+    // Scheduler log table — tracks sent autonomous emails to avoid duplicates
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`scheduler_log\` (
+        \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\` INT NOT NULL,
+        \`jobType\` VARCHAR(50) NOT NULL,
+        \`dateKey\` VARCHAR(20) NOT NULL,
+        \`sentAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY \`uq_job_date\` (\`userId\`, \`jobType\`, \`dateKey\`),
+        INDEX \`idx_user_job\` (\`userId\`, \`jobType\`)
+      )
+    `);
+
     for (const { table, column, ddl } of checks) {
       const [rows] = await conn.query(
         `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
@@ -1862,6 +1893,161 @@ export async function getLastStreakNotification(userId: number): Promise<string 
     if (!row?.d) return null;
     const d = row.d instanceof Date ? row.d.toISOString().slice(0, 10) : String(row.d);
     return d;
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── Zion Memory Functions ────────────────────────────────────────────────────
+
+export type ZionMemoryItem = {
+  id: number;
+  category: "preference" | "pattern" | "insight" | "fact";
+  key_name: string;
+  value: string;
+  confidence: number;
+  observedCount: number;
+  lastObservedAt: string;
+};
+
+export async function getZionMemory(userId: number): Promise<ZionMemoryItem[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT id, category, key_name, value, confidence, observedCount, lastObservedAt
+       FROM \`zion_memory\` WHERE userId = ?
+       ORDER BY confidence DESC, observedCount DESC
+       LIMIT 50`,
+      [userId]
+    );
+    return (rows as any[]).map(r => ({
+      id: r.id,
+      category: r.category as ZionMemoryItem["category"],
+      key_name: r.key_name,
+      value: r.value,
+      confidence: r.confidence,
+      observedCount: r.observedCount,
+      lastObservedAt: r.lastObservedAt instanceof Date ? r.lastObservedAt.toISOString().slice(0,10) : String(r.lastObservedAt ?? ""),
+    }));
+  } finally {
+    conn.release();
+  }
+}
+
+export async function upsertZionMemory(
+  userId: number,
+  category: ZionMemoryItem["category"],
+  keyName: string,
+  value: string,
+  confidence = 1.0
+): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `INSERT INTO \`zion_memory\` (userId, category, key_name, value, confidence, observedCount, lastObservedAt)
+       VALUES (?, ?, ?, ?, ?, 1, NOW())
+       ON DUPLICATE KEY UPDATE
+         value = VALUES(value),
+         confidence = VALUES(confidence),
+         observedCount = observedCount + 1,
+         lastObservedAt = NOW(),
+         updatedAt = NOW()`,
+      [userId, category, keyName.slice(0, 200), value.slice(0, 1000), confidence]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+export async function deleteZionMemory(userId: number, keyName: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(`DELETE FROM \`zion_memory\` WHERE userId = ? AND key_name = ?`, [userId, keyName]);
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── Scheduler Helpers ────────────────────────────────────────────────────────
+
+/** Returns true if this job already ran for this user+dateKey today */
+export async function schedulerAlreadyRan(userId: number, jobType: string, dateKey: string): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT id FROM \`scheduler_log\` WHERE userId = ? AND jobType = ? AND dateKey = ? LIMIT 1`,
+      [userId, jobType, dateKey]
+    );
+    return (rows as any[]).length > 0;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function markSchedulerRan(userId: number, jobType: string, dateKey: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `INSERT IGNORE INTO \`scheduler_log\` (userId, jobType, dateKey) VALUES (?, ?, ?)`,
+      [userId, jobType, dateKey]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+/** Get all users who have been active in the past 60 days and have an email address */
+export async function getActiveUsers(): Promise<Array<{ id: number; name: string | null; email: string; timezone: string | null }>> {
+  const pool = getPool();
+  if (!pool) return [];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT DISTINCT u.id, u.name, u.email, u.timezone
+       FROM \`users\` u
+       WHERE u.email IS NOT NULL
+         AND u.email NOT LIKE '%@bdbplanner.internal'
+         AND u.email NOT LIKE '%@bdbplanner.local'
+         AND EXISTS (
+           SELECT 1 FROM \`zion_messages\` zm WHERE zm.userId = u.id AND zm.createdAt >= DATE_SUB(NOW(), INTERVAL 60 DAY)
+           UNION ALL
+           SELECT 1 FROM \`daily_entries\` de WHERE de.userId = u.id AND de.date >= DATE_FORMAT(DATE_SUB(NOW(), INTERVAL 60 DAY), '%Y-%m-%d')
+           UNION ALL
+           SELECT 1 FROM \`daily_check_ins\` dc WHERE dc.userId = u.id AND dc.date >= DATE_FORMAT(DATE_SUB(NOW(), INTERVAL 60 DAY), '%Y-%m-%d')
+         )`,
+    );
+    return (rows as any[]).map(r => ({
+      id: r.id,
+      name: r.name ?? null,
+      email: r.email as string,
+      timezone: r.timezone ?? null,
+    }));
+  } finally {
+    conn.release();
+  }
+}
+
+/** Check if a user has a daily check-in for a given date */
+export async function hasCheckInForDate(userId: number, date: string): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT id FROM \`daily_check_ins\` WHERE userId = ? AND date = ? LIMIT 1`,
+      [userId, date]
+    );
+    return (rows as any[]).length > 0;
   } finally {
     conn.release();
   }

@@ -71,6 +71,8 @@ import {
   upsertUser,
   getUserStreak,
   getLastStreakNotification,
+  getZionMemory,
+  upsertZionMemory,
 } from "./db";
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
@@ -833,6 +835,52 @@ Generate a comprehensive Weekly Digest. Structure it as JSON with these exact fi
 // ─── Zion AI Chat Router ─────────────────────────────────────────────────────
 import { invokeLLM } from "./_core/llm";
 
+/**
+ * Runs after every Zion exchange — extracts memorable facts about the user
+ * and persists them to zion_memory. Non-blocking; errors are swallowed.
+ */
+async function extractAndSaveMemories(userId: number, userMsg: string, assistantMsg: string): Promise<void> {
+  try {
+    const { invokeLLM: llm } = await import("./_core/llm");
+    const result = await llm({
+      max_tokens: 300,
+      messages: [{
+        role: "user",
+        content: `You are a memory extractor for Zion, a wellness AI assistant.
+Read this conversation snippet and identify facts worth remembering about the user — their preferences, habits, patterns, and personality traits.
+Return a JSON array of objects: [{"category": "preference"|"pattern"|"insight"|"fact", "key": "<short_identifier>", "value": "<what_to_remember>"}]
+Rules:
+- Only extract genuinely specific and useful facts (not generic things)
+- Max 3 items per call
+- If nothing memorable, return []
+- Keys should be short snake_case identifiers (e.g. "prefers_morning_workouts", "avoids_admin_tasks")
+
+USER: ${userMsg.slice(0, 400)}
+ASSISTANT: ${assistantMsg.slice(0, 400)}`
+      }],
+    });
+
+    const raw = result.choices?.[0]?.message?.content;
+    if (typeof raw !== "string") return;
+
+    // Extract JSON from the response (may be wrapped in markdown)
+    const jsonMatch = raw.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return;
+
+    const items = JSON.parse(jsonMatch[0]) as Array<{ category: string; key: string; value: string }>;
+    if (!Array.isArray(items)) return;
+
+    for (const item of items.slice(0, 3)) {
+      if (!item.key || !item.value || typeof item.key !== "string" || typeof item.value !== "string") continue;
+      const validCategories = ["preference", "pattern", "insight", "fact"];
+      const category = validCategories.includes(item.category) ? item.category as "preference" | "pattern" | "insight" | "fact" : "fact";
+      await upsertZionMemory(userId, category, item.key.slice(0, 200), item.value.slice(0, 500));
+    }
+  } catch {
+    // Silently swallow — memory extraction should never affect UX
+  }
+}
+
 const zionRouter = router({
 
   // ── Daily personalised greeting ───────────────────────────────────────────
@@ -1000,7 +1048,13 @@ Rules:
         ? context.recentNotes.map(n => `  • [${n.folder || 'General'}] ${n.title}: ${(n.content || '').slice(0, 100)}`).join('\n')
         : '  (No notes yet)';
 
-      const systemPrompt = `You are Zion, a warm, encouraging, and deeply intuitive AI wellness assistant for the Be Do Become Wellness platform by Leah Marville. You have FULL ACCESS to the user's planner data and must use it intelligently in every response.
+      // ── Load Zion's memory about this user ────────────────────────────────
+      const memories = await getZionMemory(userId);
+      const memoriesContext = memories.length
+        ? memories.map(m => `  [${m.category}] ${m.key_name}: ${m.value}`).join('\n')
+        : '  (No learned preferences yet — this is being built over time)';
+
+      const systemPrompt = `You are Zion, a warm, encouraging, and deeply intuitive AI wellness assistant for the Be Do Become Wellness platform by Leah Marville. You have FULL ACCESS to the user's planner data AND a growing memory of their preferences, patterns, and habits — use both intelligently in every response.
 
 Today's date: ${today} (Week ${context.weekNumber} of ${context.year})
 
@@ -1009,6 +1063,10 @@ Today's date: ${today} (Week ${context.weekNumber} of ${context.year})
 - You speak with gentle authority and wisdom
 - You celebrate wins and reframe challenges as growth opportunities
 - You use the Be Do Become framework: who you're BEING, what you're DOING, and who you're BECOMING
+- You remember things — use your memory of this user to personalise every response
+
+## WHAT YOU'VE LEARNED ABOUT THIS USER (your persistent memory)
+${memoriesContext}
 
 ## FULL PLANNER DATA (use this to answer any question about the user's life, progress, and schedule)
 
@@ -1118,6 +1176,9 @@ RULES:
         content: displayContent,
         metadata: plannerActions.length > 0 ? JSON.stringify({ plannerActions }) : null,
       });
+
+      // ── Background memory extraction (non-blocking) ───────────────────────
+      extractAndSaveMemories(userId, input.message, displayContent).catch(() => {});
 
       return { content: displayContent, plannerActions };
     }),
@@ -1691,6 +1752,22 @@ Keep each section tight — max 3-4 bullet points. Tone: warm, direct, executive
       const rawContent = result.choices?.[0]?.message?.content;
       const briefing = typeof rawContent === "string" ? rawContent : "Could not generate briefing.";
       return { briefing, dateLabel, hasEmails: !!emailContext };
+    }),
+
+  // ── Memory management ─────────────────────────────────────────────────────
+
+  /** List Zion's memories for the current user */
+  getMemories: protectedProcedure.query(async ({ ctx }) => {
+    return getZionMemory(ctx.user.id);
+  }),
+
+  /** Delete a specific memory entry */
+  deleteMemory: protectedProcedure
+    .input(z.object({ keyName: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { deleteZionMemory } = await import("./db");
+      await deleteZionMemory(ctx.user.id, input.keyName);
+      return { success: true };
     }),
 });
 

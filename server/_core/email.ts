@@ -5,6 +5,66 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_ADDRESS = process.env.EMAIL_FROM || "Be Do Become <hello@bedobecome.com>";
 const APP_URL = process.env.APP_URL || "https://bdbplanner.com";
 
+// ── Shared helpers ─────────────────────────────────────────────────────────────
+
+/** Convert simple markdown to email-safe HTML (headings, bold, bullets, line breaks) */
+function mdToHtml(md: string): string {
+  return md
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/^## (.+)$/gm, '<h3 style="margin:18px 0 6px;font-size:15px;font-weight:800;color:#1a1a1a;">$1</h3>')
+    .replace(/^### (.+)$/gm, '<h4 style="margin:14px 0 4px;font-size:13px;font-weight:700;color:#2d2d2d;">$1</h4>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^- (.+)$/gm, '<li style="margin:3px 0;font-size:14px;color:#4a4a4a;line-height:1.6;">$1</li>')
+    .replace(/(<li[^>]*>.*<\/li>\n?)+/g, m => `<ul style="margin:6px 0 10px 18px;padding:0;">${m}</ul>`)
+    .replace(/\n\n/g, '</p><p style="margin:8px 0;font-size:14px;line-height:1.7;color:#4a4a4a;">')
+    .replace(/\n/g, "<br/>")
+    .replace(/^/, '<p style="margin:8px 0;font-size:14px;line-height:1.7;color:#4a4a4a;">')
+    .replace(/$/, "</p>");
+}
+
+function emailShell(accentColor: string, headerEmoji: string, headerTitle: string, headerSub: string, body: string): string {
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background-color:#faf8f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#faf8f5;padding:40px 20px;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+        <tr>
+          <td style="background:${accentColor};padding:36px 40px 28px;text-align:center;">
+            <p style="margin:0 0 4px;font-size:13px;color:rgba(255,255,255,0.8);letter-spacing:2px;text-transform:uppercase;font-weight:600;">Be · Do · Become</p>
+            <div style="font-size:36px;margin:8px 0 4px;">${headerEmoji}</div>
+            <h1 style="margin:0;font-size:26px;font-weight:900;color:#ffffff;">${headerTitle}</h1>
+            <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.75);">${headerSub}</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:36px 40px;">
+            ${body}
+            <table cellpadding="0" cellspacing="0" width="100%" style="margin-top:28px;">
+              <tr><td align="center">
+                <a href="${APP_URL}/dashboard" style="display:inline-block;background:${accentColor};color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;padding:14px 36px;border-radius:10px;">
+                  Open My Planner →
+                </a>
+              </td></tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px 40px;border-top:1px solid #f0ebe4;text-align:center;">
+            <p style="margin:0;font-size:11px;color:#b0a090;line-height:1.6;">
+              BDB Digital Wellness Planner by <strong>Leah Marville</strong> · Be Do Become Wellness<br/>
+              Zion is your AI wellness assistant — powered by Claude.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
 export async function sendWelcomeEmail(to: string, name: string) {
   if (!process.env.RESEND_API_KEY) {
     console.warn("[Email] RESEND_API_KEY not set — skipping welcome email");
@@ -163,5 +223,129 @@ export async function sendPasswordResetEmail(to: string, resetToken: string) {
     console.log(`[Email] Password reset email sent to ${to}`);
   } catch (err) {
     console.error("[Email] Failed to send password reset email:", err);
+  }
+}
+
+// ── Morning Chief of Staff Briefing ───────────────────────────────────────────
+
+export async function sendMorningBriefingEmail(to: string, name: string, briefing: string, dateLabel: string) {
+  if (!process.env.RESEND_API_KEY) return;
+  const firstName = name?.split(" ")[0] || "there";
+  try {
+    await resend.emails.send({
+      from: FROM_ADDRESS,
+      to,
+      subject: `☀️ Good morning, ${firstName} — Your Zion Briefing for ${dateLabel}`,
+      html: emailShell(
+        "linear-gradient(135deg,#7c3aed,#4f46e5)",
+        "☀️",
+        "Good Morning Briefing",
+        `${dateLabel} · Powered by Zion`,
+        `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#4a4a4a;">
+          Good morning, <strong>${firstName}</strong>! Here's your daily briefing from Zion — your AI Chief of Staff.
+        </p>
+        <div style="background:#faf8f5;border-radius:12px;padding:24px;border-left:4px solid #7c3aed;">
+          ${mdToHtml(briefing)}
+        </div>`
+      ),
+    });
+    console.log(`[Email] Morning briefing sent to ${to}`);
+  } catch (err) {
+    console.error("[Email] Failed to send morning briefing:", err);
+  }
+}
+
+// ── Sunday Week-Ahead Review ──────────────────────────────────────────────────
+
+export async function sendWeekAheadEmail(to: string, name: string, content: string, weekLabel: string) {
+  if (!process.env.RESEND_API_KEY) return;
+  const firstName = name?.split(" ")[0] || "there";
+  try {
+    await resend.emails.send({
+      from: FROM_ADDRESS,
+      to,
+      subject: `🗓️ ${firstName}, your week ahead is ready — ${weekLabel}`,
+      html: emailShell(
+        "linear-gradient(135deg,#059669,#10b981)",
+        "🗓️",
+        "Your Week Ahead",
+        `${weekLabel} · Sunday Review by Zion`,
+        `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#4a4a4a;">
+          Zion has reviewed your goals and planner to prepare your week. Here's what you need to know going into <strong>${weekLabel}</strong>.
+        </p>
+        <div style="background:#f0fdf4;border-radius:12px;padding:24px;border-left:4px solid #10b981;">
+          ${mdToHtml(content)}
+        </div>`
+      ),
+    });
+    console.log(`[Email] Week-ahead review sent to ${to}`);
+  } catch (err) {
+    console.error("[Email] Failed to send week-ahead review:", err);
+  }
+}
+
+// ── Monthly Reflection ────────────────────────────────────────────────────────
+
+export async function sendMonthlyReflectionEmail(to: string, name: string, content: string, monthLabel: string) {
+  if (!process.env.RESEND_API_KEY) return;
+  const firstName = name?.split(" ")[0] || "there";
+  try {
+    await resend.emails.send({
+      from: FROM_ADDRESS,
+      to,
+      subject: `🌙 ${firstName}, your ${monthLabel} reflection is here`,
+      html: emailShell(
+        "linear-gradient(135deg,#1a1230,#2d1f4e)",
+        "🌙",
+        `${monthLabel} Reflection`,
+        "Monthly review · Powered by Zion",
+        `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#4a4a4a;">
+          ${monthLabel} is wrapping up, <strong>${firstName}</strong>. Zion has reviewed your month — here's your reflection.
+        </p>
+        <div style="background:#f5f3ff;border-radius:12px;padding:24px;border-left:4px solid #7c3aed;">
+          ${mdToHtml(content)}
+        </div>`
+      ),
+    });
+    console.log(`[Email] Monthly reflection sent to ${to}`);
+  } catch (err) {
+    console.error("[Email] Failed to send monthly reflection:", err);
+  }
+}
+
+// ── Habit Nudge ───────────────────────────────────────────────────────────────
+
+export async function sendHabitNudgeEmail(to: string, name: string) {
+  if (!process.env.RESEND_API_KEY) return;
+  const firstName = name?.split(" ")[0] || "there";
+  try {
+    await resend.emails.send({
+      from: FROM_ADDRESS,
+      to,
+      subject: `⏰ ${firstName}, your daily check-in is waiting`,
+      html: emailShell(
+        "linear-gradient(135deg,#f59e0b,#d97706)",
+        "⏰",
+        "Daily Check-In Reminder",
+        "From Zion, your accountability partner",
+        `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#4a4a4a;">
+          Hey <strong>${firstName}</strong>, you haven't logged your daily check-in yet today.
+        </p>
+        <div style="background:#fffbeb;border-radius:12px;padding:24px;border-left:4px solid #f59e0b;margin-bottom:20px;">
+          <p style="margin:0 0 10px;font-size:14px;line-height:1.7;color:#4a4a4a;">
+            Your daily check-in is one of the most powerful habits you can build. It takes less than 30 seconds and keeps your streak alive.
+          </p>
+          <p style="margin:0;font-size:14px;line-height:1.7;color:#4a4a4a;">
+            Consistency is the foundation of everything you're building. <strong>Be Do Become</strong> — show up, even on the hard days. 💛
+          </p>
+        </div>
+        <p style="margin:0;font-size:13px;color:#8a7a6a;text-align:center;">
+          Click below to log your check-in now. It'll take 10 seconds.
+        </p>`
+      ),
+    });
+    console.log(`[Email] Habit nudge sent to ${to}`);
+  } catch (err) {
+    console.error("[Email] Failed to send habit nudge:", err);
   }
 }

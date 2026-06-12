@@ -17,6 +17,7 @@ import { createContext } from "./context";
 // bundles vite / vite-plugins into the production output
 
 import { getDb, ensureSchema } from "../db";
+import { startScheduler } from "../scheduler";
 import webpush from "web-push";
 import { LOCAL_UPLOADS_DIR } from "../storage";
 
@@ -229,6 +230,8 @@ async function startServer() {
 
   server.listen(port, "0.0.0.0", () => {
     console.log(`Server running on http://0.0.0.0:${port}/`);
+    // Start Zion's autonomous scheduler after server is listening
+    startScheduler();
   });
 }
 
