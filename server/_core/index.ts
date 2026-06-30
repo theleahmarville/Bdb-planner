@@ -18,6 +18,14 @@ import { createContext } from "./context";
 
 import { getDb, ensureSchema } from "../db";
 import { startScheduler } from "../scheduler";
+import {
+  requestIdMiddleware,
+  cspMiddleware,
+  securityHeadersMiddleware,
+  noCacheApiMiddleware,
+  httpsEnforcement,
+  contentTypeMiddleware,
+} from "./security";
 import webpush from "web-push";
 import { LOCAL_UPLOADS_DIR } from "../storage";
 
@@ -121,14 +129,33 @@ async function startServer() {
   // Hide Express fingerprint
   app.disable("x-powered-by");
 
-  // HTTP security headers (helmet) — before CORS
+  // ── Security middleware stack (order matters) ─────────────────────────────
+  app.use(requestIdMiddleware);        // Attach unique request ID for audit trail correlation
+  app.use(httpsEnforcement);           // Redirect HTTP → HTTPS in production
+  app.use(noCacheApiMiddleware);       // Prevent caching of sensitive API responses
+
+  // Helmet HTTP security headers
   app.use(helmet({
-    contentSecurityPolicy: false, // Disable CSP for now — Vite dev mode needs it off
-    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: false,       // We apply CSP ourselves below (more control)
+    crossOriginEmbedderPolicy: false,   // Allow OAuth popups
+    hsts: {
+      maxAge: 31536000,                 // 1 year HSTS (SOC 2 CC6.7)
+      includeSubDomains: true,
+      preload: true,
+    },
   }));
 
+  app.use(cspMiddleware);              // Content Security Policy (OWASP A05)
+  app.use(securityHeadersMiddleware);  // Permissions-Policy, CORP, COOP
+  app.use(contentTypeMiddleware);      // Reject unexpected Content-Types
+
   // CORS — allow requests from the configured frontend origin
-  app.use(cors({ origin: process.env.CORS_ORIGIN || true, credentials: true }));
+  app.use(cors({
+    origin: process.env.CORS_ORIGIN || (process.env.NODE_ENV === "production" ? false : true),
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
+  }));
   // Bypass localtunnel interstitial page
   app.use((_req, res, next) => {
     res.setHeader("bypass-tunnel-reminder", "true");

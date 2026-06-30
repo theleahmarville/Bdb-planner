@@ -2430,6 +2430,48 @@ const inviteRouter = router({
     }),
 });
 
+// ─── Security / Compliance Router ────────────────────────────────────────────
+const securityRouter = router({
+  /** Admin: view recent audit log entries */
+  auditLog: adminProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(500).default(100), category: z.enum(["auth","data","admin","security"]).optional() }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return [];
+      const conn = await pool.getConnection();
+      try {
+        const where = input.category ? "WHERE category = ?" : "";
+        const params: unknown[] = input.category ? [input.category, input.limit] : [input.limit];
+        const [rows] = await conn.query(
+          `SELECT id, userId, event, category, outcome, ip, userAgent, detail, requestId, createdAt
+           FROM \`audit_log\` ${where} ORDER BY createdAt DESC LIMIT ?`,
+          params
+        );
+        return rows as any[];
+      } finally { conn.release(); }
+    }),
+
+  /** Admin: view failed login summary for the last 24h */
+  loginAttempts: adminProcedure.query(async () => {
+    const { getPool } = await import("./db");
+    const pool = getPool();
+    if (!pool) return [];
+    const conn = await pool.getConnection();
+    try {
+      const [rows] = await conn.query(
+        `SELECT email, ip, COUNT(*) as attempts, MAX(createdAt) as lastAttempt
+         FROM \`login_attempts\`
+         WHERE success = 0 AND createdAt >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+         GROUP BY email, ip
+         ORDER BY attempts DESC
+         LIMIT 50`
+      );
+      return rows as any[];
+    } finally { conn.release(); }
+  }),
+});
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -2440,6 +2482,7 @@ export const appRouter = router({
       return { success: true } as const;
     }),
   }),
+  security: securityRouter,
   annual: annualRouter,
   bigGoals: bigGoalsRouter,
   monthly: monthlyRouter,

@@ -188,6 +188,39 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // ── Security: Audit log — ISO 27001 A.12.4, SOC 2 CC7.1 ──────────────────
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`audit_log\` (
+        \`id\`        BIGINT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\`    INT,
+        \`event\`     VARCHAR(100) NOT NULL,
+        \`category\`  ENUM('auth','data','admin','security') NOT NULL DEFAULT 'auth',
+        \`outcome\`   ENUM('success','failure','blocked') NOT NULL DEFAULT 'success',
+        \`ip\`        VARCHAR(64),
+        \`userAgent\` VARCHAR(500),
+        \`detail\`    JSON,
+        \`requestId\` VARCHAR(36),
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`idx_userId\`   (\`userId\`),
+        INDEX \`idx_event\`    (\`event\`),
+        INDEX \`idx_outcome\`  (\`outcome\`),
+        INDEX \`idx_createdAt\` (\`createdAt\`)
+      )
+    `);
+
+    // ── Security: Login attempts — account lockout (Essential 8, SOC 2 CC6.2) ─
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`login_attempts\` (
+        \`id\`        BIGINT AUTO_INCREMENT PRIMARY KEY,
+        \`email\`     VARCHAR(255) NOT NULL,
+        \`ip\`        VARCHAR(64),
+        \`success\`   TINYINT(1) DEFAULT 0,
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`idx_email_time\` (\`email\`, \`createdAt\`),
+        INDEX \`idx_ip_time\`    (\`ip\`, \`createdAt\`)
+      )
+    `);
+
     // Zion memory table — stores learned preferences, patterns, insights
     await conn.query(`
       CREATE TABLE IF NOT EXISTS \`zion_memory\` (
@@ -2048,6 +2081,97 @@ export async function hasCheckInForDate(userId: number, date: string): Promise<b
       [userId, date]
     );
     return (rows as any[]).length > 0;
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── GDPR / Privacy Data Rights ───────────────────────────────────────────────
+// ISO 27001 A.18.1.4, App Store / Google Play privacy requirements
+
+/**
+ * Export all data belonging to a user (Right to Access / Data Portability).
+ */
+export async function exportUserData(userId: number): Promise<Record<string, unknown>> {
+  const pool = getPool();
+  if (!pool) return {};
+  const conn = await pool.getConnection();
+  try {
+    const tables: Array<{ key: string; sql: string }> = [
+      { key: "profile",      sql: `SELECT name, email, createdAt FROM \`users\` WHERE id = ?` },
+      { key: "annualPlans",  sql: `SELECT year, data FROM \`annual_plans\` WHERE userId = ?` },
+      { key: "monthlyPlans", sql: `SELECT year, month, data FROM \`monthly_plans\` WHERE userId = ?` },
+      { key: "weeklyPlans",  sql: `SELECT year, weekNumber, data FROM \`weekly_plans\` WHERE userId = ?` },
+      { key: "dailyEntries", sql: `SELECT date, data FROM \`daily_entries\` WHERE userId = ?` },
+      { key: "notes",        sql: `SELECT title, folder, content, createdAt FROM \`notes\` WHERE userId = ?` },
+      { key: "reminders",    sql: `SELECT title, date, timeSlot, createdAt FROM \`reminders\` WHERE userId = ?` },
+      { key: "checkIns",     sql: `SELECT date, rating, note FROM \`daily_check_ins\` WHERE userId = ?` },
+      { key: "zionMemory",   sql: `SELECT category, key_name, value FROM \`zion_memory\` WHERE userId = ?` },
+      { key: "zionMessages", sql: `SELECT role, content, createdAt FROM \`zion_messages\` WHERE userId = ?` },
+    ];
+
+    const result: Record<string, unknown> = {
+      exportedAt: new Date().toISOString(),
+      exportVersion: "1.0",
+    };
+
+    for (const { key, sql } of tables) {
+      try {
+        const [rows] = await conn.query(sql, [userId]);
+        result[key] = rows;
+      } catch {
+        result[key] = [];
+      }
+    }
+
+    return result;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * Permanently erase all personal data for a user (Right to Erasure / GDPR Art. 17).
+ * Anonymises the user row to preserve referential integrity; hard-deletes everything else.
+ */
+export async function deleteUserData(userId: number): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    await conn.query(
+      `UPDATE \`users\` SET
+         name = '[Deleted User]',
+         email = CONCAT('deleted_', id, '@deleted.invalid'),
+         passwordHash = NULL,
+         avatarUrl = NULL,
+         bio = NULL,
+         lastSignedIn = NULL
+       WHERE id = ?`,
+      [userId]
+    );
+
+    const hardDeleteTables = [
+      "annual_plans","monthly_plans","weekly_plans","daily_entries",
+      "notes","reminders","daily_check_ins","zion_messages","zion_memory",
+      "push_subscriptions","user_integrations","scheduler_log","social_accounts",
+    ];
+    for (const table of hardDeleteTables) {
+      try { await conn.query(`DELETE FROM \`${table}\` WHERE userId = ?`, [userId]); } catch { /* non-fatal */ }
+    }
+
+    // Anonymise rather than delete — community threads remain coherent
+    await conn.query(
+      `UPDATE \`community_messages\` SET content = '[Message removed]' WHERE userId = ?`,
+      [userId]
+    );
+
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
   } finally {
     conn.release();
   }
