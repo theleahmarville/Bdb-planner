@@ -2,7 +2,7 @@ import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
 import {
   getAnnualPlan,
   upsertAnnualPlan,
@@ -69,6 +69,10 @@ import {
   getUserPushSubscriptions,
   getUserByEmail,
   upsertUser,
+  getUserStreak,
+  getLastStreakNotification,
+  getZionMemory,
+  upsertZionMemory,
 } from "./db";
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
@@ -542,7 +546,7 @@ const socialAccountsRouter = router({
 
   getContentStrategy: protectedProcedure
     .input(z.object({
-      weeklyPosts: z.record(z.string()).optional(),
+      weeklyPosts: z.record(z.string(), z.string()).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const accounts = await getSocialAccounts(ctx.user.id);
@@ -569,7 +573,7 @@ const socialAccountsRouter = router({
 
       const postsSummary = input.weeklyPosts
         ? Object.entries(input.weeklyPosts)
-            .filter(([, v]) => v?.trim())
+            .filter(([, v]) => (v as string)?.trim())
             .map(([k, v]) => `- ${k}: ${v}`)
             .join("\n")
         : "No posts planned yet this week";
@@ -831,6 +835,52 @@ Generate a comprehensive Weekly Digest. Structure it as JSON with these exact fi
 // ─── Zion AI Chat Router ─────────────────────────────────────────────────────
 import { invokeLLM } from "./_core/llm";
 
+/**
+ * Runs after every Zion exchange — extracts memorable facts about the user
+ * and persists them to zion_memory. Non-blocking; errors are swallowed.
+ */
+async function extractAndSaveMemories(userId: number, userMsg: string, assistantMsg: string): Promise<void> {
+  try {
+    const { invokeLLM: llm } = await import("./_core/llm");
+    const result = await llm({
+      max_tokens: 300,
+      messages: [{
+        role: "user",
+        content: `You are a memory extractor for Zion, a wellness AI assistant.
+Read this conversation snippet and identify facts worth remembering about the user — their preferences, habits, patterns, and personality traits.
+Return a JSON array of objects: [{"category": "preference"|"pattern"|"insight"|"fact", "key": "<short_identifier>", "value": "<what_to_remember>"}]
+Rules:
+- Only extract genuinely specific and useful facts (not generic things)
+- Max 3 items per call
+- If nothing memorable, return []
+- Keys should be short snake_case identifiers (e.g. "prefers_morning_workouts", "avoids_admin_tasks")
+
+USER: ${userMsg.slice(0, 400)}
+ASSISTANT: ${assistantMsg.slice(0, 400)}`
+      }],
+    });
+
+    const raw = result.choices?.[0]?.message?.content;
+    if (typeof raw !== "string") return;
+
+    // Extract JSON from the response (may be wrapped in markdown)
+    const jsonMatch = raw.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return;
+
+    const items = JSON.parse(jsonMatch[0]) as Array<{ category: string; key: string; value: string }>;
+    if (!Array.isArray(items)) return;
+
+    for (const item of items.slice(0, 3)) {
+      if (!item.key || !item.value || typeof item.key !== "string" || typeof item.value !== "string") continue;
+      const validCategories = ["preference", "pattern", "insight", "fact"];
+      const category = validCategories.includes(item.category) ? item.category as "preference" | "pattern" | "insight" | "fact" : "fact";
+      await upsertZionMemory(userId, category, item.key.slice(0, 200), item.value.slice(0, 500));
+    }
+  } catch {
+    // Silently swallow — memory extraction should never affect UX
+  }
+}
+
 const zionRouter = router({
 
   // ── Daily personalised greeting ───────────────────────────────────────────
@@ -998,7 +1048,13 @@ Rules:
         ? context.recentNotes.map(n => `  • [${n.folder || 'General'}] ${n.title}: ${(n.content || '').slice(0, 100)}`).join('\n')
         : '  (No notes yet)';
 
-      const systemPrompt = `You are Zion, a warm, encouraging, and deeply intuitive AI wellness assistant for the Be Do Become Wellness platform by Leah Marville. You have FULL ACCESS to the user's planner data and must use it intelligently in every response.
+      // ── Load Zion's memory about this user ────────────────────────────────
+      const memories = await getZionMemory(userId);
+      const memoriesContext = memories.length
+        ? memories.map(m => `  [${m.category}] ${m.key_name}: ${m.value}`).join('\n')
+        : '  (No learned preferences yet — this is being built over time)';
+
+      const systemPrompt = `You are Zion, a warm, encouraging, and deeply intuitive AI wellness assistant for the Be Do Become Wellness platform by Leah Marville. You have FULL ACCESS to the user's planner data AND a growing memory of their preferences, patterns, and habits — use both intelligently in every response.
 
 Today's date: ${today} (Week ${context.weekNumber} of ${context.year})
 
@@ -1007,6 +1063,10 @@ Today's date: ${today} (Week ${context.weekNumber} of ${context.year})
 - You speak with gentle authority and wisdom
 - You celebrate wins and reframe challenges as growth opportunities
 - You use the Be Do Become framework: who you're BEING, what you're DOING, and who you're BECOMING
+- You remember things — use your memory of this user to personalise every response
+
+## WHAT YOU'VE LEARNED ABOUT THIS USER (your persistent memory)
+${memoriesContext}
 
 ## FULL PLANNER DATA (use this to answer any question about the user's life, progress, and schedule)
 
@@ -1116,6 +1176,9 @@ RULES:
         content: displayContent,
         metadata: plannerActions.length > 0 ? JSON.stringify({ plannerActions }) : null,
       });
+
+      // ── Background memory extraction (non-blocking) ───────────────────────
+      extractAndSaveMemories(userId, input.message, displayContent).catch(() => {});
 
       return { content: displayContent, plannerActions };
     }),
@@ -1540,6 +1603,39 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
       }
     }),
 
+  // ── Streak: how many consecutive days has the user shown up ──────────────
+  streak: protectedProcedure.query(async ({ ctx }) => {
+    return getUserStreak(ctx.user.id);
+  }),
+
+  // ── Check streak & send Zion miss-notification if broken ─────────────────
+  checkAndNotifyStreak: protectedProcedure.mutation(async ({ ctx }) => {
+    const streak = await getUserStreak(ctx.user.id);
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Only send a notification if the streak is broken AND we haven't sent one today
+    if (!streak.streakBroken) return { notified: false, streak };
+    const lastNotified = await getLastStreakNotification(ctx.user.id);
+    if (lastNotified === today) return { notified: false, streak };
+
+    // Build the encouragement message
+    const messages = [
+      `Hey, I noticed you missed a day — and that's okay. 💛 Every comeback is a story worth telling. Your streak is ready to be rebuilt, starting right now. What's one thing you want to get done today?`,
+      `Life happened — no judgment here. 🌱 The fact that you're back means everything. You don't need a perfect streak; you need a persistent one. Let's go again. What's on your mind today?`,
+      `Missed a day? No big deal — the work doesn't disappear, and neither does your potential. 🔥 The best thing you can do is show up today. Even 10 minutes counts. What would you like to tackle?`,
+    ];
+    const msg = messages[Math.floor(Math.random() * messages.length)];
+
+    await saveZionMessage({
+      userId: ctx.user.id,
+      role: "assistant",
+      content: `## Your streak was broken — but you're back! 💪\n\n${msg}`,
+      metadata: JSON.stringify({ type: "streak_break_notification" }),
+    });
+
+    return { notified: true, streak };
+  }),
+
   // ── Chief of Staff: structured daily briefing ────────────────────────────
   chiefOfStaff: protectedProcedure
     .input(z.object({ date: zDate.optional(), includeEmails: z.boolean().optional() }))
@@ -1649,7 +1745,6 @@ Keep each section tight — max 3-4 bullet points. Tone: warm, direct, executive
 
       const { invokeLLM } = await import("./_core/llm");
       const result = await invokeLLM({
-        model: "claude-opus-4-5",
         max_tokens: 900,
         messages: [{ role: "user", content: prompt }],
       });
@@ -1657,6 +1752,22 @@ Keep each section tight — max 3-4 bullet points. Tone: warm, direct, executive
       const rawContent = result.choices?.[0]?.message?.content;
       const briefing = typeof rawContent === "string" ? rawContent : "Could not generate briefing.";
       return { briefing, dateLabel, hasEmails: !!emailContext };
+    }),
+
+  // ── Memory management ─────────────────────────────────────────────────────
+
+  /** List Zion's memories for the current user */
+  getMemories: protectedProcedure.query(async ({ ctx }) => {
+    return getZionMemory(ctx.user.id);
+  }),
+
+  /** Delete a specific memory entry */
+  deleteMemory: protectedProcedure
+    .input(z.object({ keyName: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { deleteZionMemory } = await import("./db");
+      await deleteZionMemory(ctx.user.id, input.keyName);
+      return { success: true };
     }),
 });
 
@@ -2082,15 +2193,13 @@ const gmailRouter = router({
       const validEmails = emailDetails.filter(Boolean) as { subject: string; from: string; snippet: string }[];
 
       // Use Claude to summarise
-      const Anthropic = (await import("@anthropic-ai/sdk")).default;
-      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const { invokeLLM: invokeLLMGmail } = await import("./_core/llm");
 
       const emailsText = validEmails.map((e, i) =>
         `${i + 1}. From: ${e.from}\n   Subject: ${e.subject}\n   Preview: ${e.snippet}`
       ).join("\n\n");
 
-      const response = await anthropic.messages.create({
-        model: "claude-opus-4-5",
+      const gmailResult = await invokeLLMGmail({
         max_tokens: 800,
         messages: [{
           role: "user",
@@ -2100,7 +2209,8 @@ ${emailsText}`,
         }],
       });
 
-      const summary = response.content[0].type === "text" ? response.content[0].text : "Could not generate summary.";
+      const rawSummary = gmailResult.choices?.[0]?.message?.content;
+      const summary = typeof rawSummary === "string" && rawSummary ? rawSummary : "Could not generate summary.";
 
       return {
         summary,
@@ -2320,6 +2430,48 @@ const inviteRouter = router({
     }),
 });
 
+// ─── Security / Compliance Router ────────────────────────────────────────────
+const securityRouter = router({
+  /** Admin: view recent audit log entries */
+  auditLog: adminProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(500).default(100), category: z.enum(["auth","data","admin","security"]).optional() }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return [];
+      const conn = await pool.getConnection();
+      try {
+        const where = input.category ? "WHERE category = ?" : "";
+        const params: unknown[] = input.category ? [input.category, input.limit] : [input.limit];
+        const [rows] = await conn.query(
+          `SELECT id, userId, event, category, outcome, ip, userAgent, detail, requestId, createdAt
+           FROM \`audit_log\` ${where} ORDER BY createdAt DESC LIMIT ?`,
+          params
+        );
+        return rows as any[];
+      } finally { conn.release(); }
+    }),
+
+  /** Admin: view failed login summary for the last 24h */
+  loginAttempts: adminProcedure.query(async () => {
+    const { getPool } = await import("./db");
+    const pool = getPool();
+    if (!pool) return [];
+    const conn = await pool.getConnection();
+    try {
+      const [rows] = await conn.query(
+        `SELECT email, ip, COUNT(*) as attempts, MAX(createdAt) as lastAttempt
+         FROM \`login_attempts\`
+         WHERE success = 0 AND createdAt >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+         GROUP BY email, ip
+         ORDER BY attempts DESC
+         LIMIT 50`
+      );
+      return rows as any[];
+    } finally { conn.release(); }
+  }),
+});
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -2330,6 +2482,7 @@ export const appRouter = router({
       return { success: true } as const;
     }),
   }),
+  security: securityRouter,
   annual: annualRouter,
   bigGoals: bigGoalsRouter,
   monthly: monthlyRouter,

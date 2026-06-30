@@ -9,8 +9,7 @@ import {
   Sparkles, Mic, MicOff, Send, Trash2, CheckCircle2,
   Calendar, Target, BookOpen, Heart, BarChart2, Loader2,
   Volume2, ChevronDown, Bell, DollarSign, Share2, Smile,
-  ExternalLink, SaveAll, Mail, Briefcase, RefreshCw, X, Clock,
-  AlertCircle, ChevronUp,
+  ExternalLink, SaveAll, Brain, X as XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { getISOWeek, startOfISOWeek, format } from "date-fns";
@@ -314,239 +313,6 @@ function MessageBubble({ msg }: { msg: Message }) {
   );
 }
 
-// ── Gmail Email Summary Panel ──────────────────────────────────────────────────
-function EmailSummaryPanel({
-  onClose,
-}: {
-  onClose: () => void;
-}) {
-  const { isAuthenticated } = useAuth();
-  const [result, setResult] = useState<{ summary: string; emailCount: number; emails: { from: string; subject: string; snippet: string }[] } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const { data: gmailStatus } = trpc.gmail.status.useQuery(undefined, { enabled: isAuthenticated });
-  const summaryMutation = trpc.gmail.summarizeToday.useMutation();
-
-  const fetchEmails = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const data = await summaryMutation.mutateAsync({ date: today });
-      setResult(data as any);
-    } catch (e: any) {
-      setError(e?.message ?? "Could not fetch emails.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { fetchEmails(); }, []);
-
-  // Parse sender name from "Name <email>" format
-  const parseName = (from: string) => from.replace(/<[^>]+>/, "").trim() || from;
-
-  return (
-    <div className="mx-4 mb-2 rounded-2xl border border-[#e8e0d5] bg-white shadow-sm overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#f0ebe4] bg-gradient-to-r from-red-50 to-orange-50">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-full bg-red-100 flex items-center justify-center">
-            <Mail className="w-3.5 h-3.5 text-red-600" />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-[#1a1a1a]">Email Summary</p>
-            <p className="text-[10px] text-[#8a7a6a]">
-              {result ? `${result.emailCount} email${result.emailCount !== 1 ? "s" : ""} today` : "Today's inbox"}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={fetchEmails}
-            disabled={loading}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-[#8a7a6a] hover:bg-red-100 hover:text-red-600 transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-          </button>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-[#8a7a6a] hover:bg-[#f0ebe4] transition-colors"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      <div className="max-h-72 overflow-y-auto">
-        {loading && !result && (
-          <div className="flex items-center justify-center gap-2 py-8 text-[#8a7a6a]">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span className="text-sm">Fetching your emails…</span>
-          </div>
-        )}
-
-        {!gmailStatus?.gmailEnabled && !loading && (
-          <div className="p-4 flex items-start gap-3">
-            <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium text-[#3d3730]">Gmail not connected</p>
-              <p className="text-xs text-[#8a7a6a] mt-0.5">Go to <Link to="/integrations" className="text-emerald-600 underline">Integrations</Link> and re-authorize Google to enable Gmail access.</p>
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="p-4 flex items-start gap-3">
-            <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-            <p className="text-sm text-red-700">{error}</p>
-          </div>
-        )}
-
-        {result && (
-          <div className="p-4 space-y-3">
-            {result.emailCount === 0 ? (
-              <p className="text-sm text-[#8a7a6a] text-center py-2">📭 Inbox is clear today!</p>
-            ) : (
-              <>
-                {/* Individual email cards */}
-                <div className="space-y-1.5">
-                  {result.emails.slice(0, 6).map((email, i) => (
-                    <div key={i} className="flex items-start gap-2.5 p-2.5 rounded-xl bg-[#faf8f5] border border-[#ede8e0]">
-                      <div className="w-7 h-7 rounded-full bg-red-100 flex items-center justify-center shrink-0 text-[10px] font-bold text-red-600">
-                        {parseName(email.from).charAt(0).toUpperCase()}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-[#3d3730] truncate">{email.subject}</p>
-                        <p className="text-[10px] text-[#8a7a6a] truncate">{parseName(email.from)}</p>
-                        {email.snippet && (
-                          <p className="text-[10px] text-[#a09080] mt-0.5 line-clamp-1">{email.snippet}</p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  {result.emails.length > 6 && (
-                    <p className="text-[10px] text-center text-[#8a7a6a]">+{result.emails.length - 6} more emails</p>
-                  )}
-                </div>
-
-                {/* AI Summary */}
-                <div className="border-t border-[#f0ebe4] pt-3">
-                  <p className="text-[10px] font-semibold text-[#8a7a6a] uppercase tracking-wide mb-1.5 flex items-center gap-1">
-                    <Sparkles className="w-3 h-3 text-emerald-500" /> Zion's Summary
-                  </p>
-                  <div className="prose prose-sm max-w-none prose-p:my-1 text-[#3d3730] text-xs">
-                    <Streamdown>{result.summary}</Streamdown>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Chief of Staff Panel ───────────────────────────────────────────────────────
-function ChiefOfStaffPanel({ onClose }: { onClose: () => void }) {
-  const [briefing, setBriefing] = useState<{ briefing: string; dateLabel: string; hasEmails: boolean } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [includeEmails, setIncludeEmails] = useState(false);
-  const { data: gmailStatus, isAuthenticated } = trpc.gmail.status.useQuery(undefined) as any;
-  const chiefOfStaffMutation = trpc.zion.chiefOfStaff.useMutation();
-
-  const generate = async (withEmails = includeEmails) => {
-    setLoading(true);
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const data = await chiefOfStaffMutation.mutateAsync({ date: today, includeEmails: withEmails });
-      setBriefing(data);
-    } catch (e: any) {
-      toast.error(e?.message ?? "Could not generate briefing.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { generate(false); }, []);
-
-  return (
-    <div className="mx-4 mb-2 rounded-2xl border border-[#e8e0d5] bg-white shadow-sm overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#f0ebe4] bg-gradient-to-r from-violet-50 to-indigo-50">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-full bg-violet-100 flex items-center justify-center">
-            <Briefcase className="w-3.5 h-3.5 text-violet-600" />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-[#1a1a1a]">Chief of Staff</p>
-            <p className="text-[10px] text-[#8a7a6a]">{briefing?.dateLabel ?? "Daily briefing"}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          {/* Email toggle if Gmail connected */}
-          {gmailStatus?.gmailEnabled && (
-            <button
-              onClick={() => {
-                const next = !includeEmails;
-                setIncludeEmails(next);
-                generate(next);
-              }}
-              disabled={loading}
-              title={includeEmails ? "Emails included — click to exclude" : "Click to include emails"}
-              className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-full border transition-all ${
-                includeEmails
-                  ? "bg-red-50 border-red-200 text-red-600"
-                  : "bg-[#faf8f5] border-[#e8e0d5] text-[#8a7a6a]"
-              }`}
-            >
-              <Mail className="w-3 h-3" />
-              {includeEmails ? "Emails on" : "+ Emails"}
-            </button>
-          )}
-          <button
-            onClick={() => generate(includeEmails)}
-            disabled={loading}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-[#8a7a6a] hover:bg-violet-100 hover:text-violet-600 transition-colors"
-            title="Regenerate"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-          </button>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-[#8a7a6a] hover:bg-[#f0ebe4] transition-colors"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      <div className="max-h-[420px] overflow-y-auto">
-        {loading && (
-          <div className="flex flex-col items-center justify-center gap-3 py-10 text-[#8a7a6a]">
-            <div className="w-10 h-10 rounded-full bg-violet-100 flex items-center justify-center">
-              <Loader2 className="w-5 h-5 text-violet-600 animate-spin" />
-            </div>
-            <p className="text-sm">Preparing your briefing…</p>
-          </div>
-        )}
-
-        {!loading && briefing && (
-          <div className="p-4">
-            <div className="prose prose-sm max-w-none text-[#3d3730]
-              prose-h2:text-sm prose-h2:font-bold prose-h2:text-[#1a1a1a] prose-h2:mt-3 prose-h2:mb-1 prose-h2:first:mt-0
-              prose-ul:my-1 prose-li:my-0.5 prose-li:text-xs prose-p:text-xs prose-p:my-1">
-              <Streamdown>{briefing.briefing}</Streamdown>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ── Main Zion Page ─────────────────────────────────────────────────────────────
 export default function ZionPage() {
   const { isAuthenticated, loading: authLoading } = useAuth();
@@ -554,16 +320,11 @@ export default function ZionPage() {
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [isFetchingEmails, setIsFetchingEmails] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-
-  const { data: gmailStatus } = trpc.gmail.status.useQuery(undefined, { enabled: isAuthenticated, staleTime: 60_000 });
-  const emailSummaryMutation = trpc.gmail.summarizeToday.useMutation();
-  const [activePanel, setActivePanel] = useState<"emails" | "chiefofstaff" | null>(null);
 
   const { data: historyData, isLoading: historyLoading } = trpc.zion.history.useQuery(undefined, {
     enabled: isAuthenticated,
@@ -572,6 +333,9 @@ export default function ZionPage() {
   const chatMutation = trpc.zion.chat.useMutation();
   const clearMutation = trpc.zion.clearHistory.useMutation();
   const transcribeMutation = trpc.zion.transcribeVoice.useMutation();
+  const [showMemory, setShowMemory] = useState(false);
+  const { data: memories = [], refetch: refetchMemories } = trpc.zion.getMemories.useQuery(undefined, { enabled: showMemory });
+  const deleteMemoryMutation = trpc.zion.deleteMemory.useMutation({ onSuccess: () => refetchMemories() });
   const utils = trpc.useUtils();
 
   useEffect(() => {
@@ -646,50 +410,6 @@ export default function ZionPage() {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendMessage(input);
-    }
-  };
-
-  // ── Email summary (direct action, doesn't go through chat mutation) ──────────
-  const handleEmailSummary = async () => {
-    if (isFetchingEmails || isSending) return;
-
-    const today = new Date().toISOString().slice(0, 10);
-
-    // Add user-side message instantly
-    const userMsg: Message = {
-      id: `user-emails-${Date.now()}`,
-      role: "user",
-      content: "📧 Summarise my emails from today",
-      createdAt: new Date(),
-    };
-    setMessages(prev => [...prev, userMsg]);
-    setIsFetchingEmails(true);
-
-    try {
-      const result = await emailSummaryMutation.mutateAsync({ date: today });
-      const assistantMsg: Message = {
-        id: `assistant-emails-${Date.now()}`,
-        role: "assistant",
-        content: result.emailCount === 0
-          ? result.summary
-          : `📬 **${result.emailCount} email${result.emailCount > 1 ? "s" : ""} today**\n\n${result.summary}`,
-        createdAt: new Date(),
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-    } catch (err: any) {
-      const msg = err?.message ?? "Could not fetch emails. Please try again.";
-      const needsAuth = msg.includes("Re-authorize") || msg.includes("not yet granted");
-      const assistantMsg: Message = {
-        id: `assistant-emails-err-${Date.now()}`,
-        role: "assistant",
-        content: needsAuth
-          ? `🔐 **Gmail access needed**\n\nI don't have permission to read your emails yet. Head to **Integrations** and click **Re-authorize** under the Gmail section — it only takes a second.\n\n[Open Integrations →](/integrations)`
-          : `⚠️ ${msg}`,
-        createdAt: new Date(),
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-    } finally {
-      setIsFetchingEmails(false);
     }
   };
 
@@ -802,7 +522,6 @@ export default function ZionPage() {
             <button
               key={c.label}
               onClick={() => {
-                setActivePanel(null);
                 setInput(c.prompt);
                 setTimeout(() => textareaRef.current?.focus(), 50);
               }}
@@ -811,50 +530,69 @@ export default function ZionPage() {
               {c.icon}{c.label}
             </button>
           ))}
-
-          {/* Email summary panel toggle */}
+          {/* Memory chip */}
           <button
-            onClick={() => setActivePanel(p => p === "emails" ? null : "emails")}
-            title="Today's email summary"
-            className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border transition-all cursor-pointer select-none active:scale-95 ${
-              activePanel === "emails"
-                ? "bg-red-100 border-red-300 text-red-700"
-                : "bg-red-50 border-red-200 text-red-600 hover:bg-red-100 hover:border-red-300"
-            }`}
-          >
-            <Mail className="w-3 h-3" />
-            Emails
-            {activePanel === "emails" ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
-          </button>
-
-          {/* Chief of Staff panel toggle */}
-          <button
-            onClick={() => setActivePanel(p => p === "chiefofstaff" ? null : "chiefofstaff")}
-            title="Daily briefing from your Chief of Staff"
-            className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border transition-all cursor-pointer select-none active:scale-95 ${
-              activePanel === "chiefofstaff"
+            onClick={() => setShowMemory(v => !v)}
+            className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border transition-all cursor-pointer select-none ${
+              showMemory
                 ? "bg-violet-100 border-violet-300 text-violet-700"
-                : "bg-violet-50 border-violet-200 text-violet-600 hover:bg-violet-100 hover:border-violet-300"
+                : "bg-white border-[#e8e0d5] text-[#8a7a6a] hover:bg-violet-50 hover:border-violet-200 hover:text-violet-600"
             }`}
           >
-            <Briefcase className="w-3 h-3" />
-            Briefing
-            {activePanel === "chiefofstaff" ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
+            <Brain className="w-3 h-3" />Memory
           </button>
         </div>
       </div>
 
-      {/* Active panel */}
-      {activePanel === "emails" && (
-        <div className="shrink-0">
-          <EmailSummaryPanel onClose={() => setActivePanel(null)} />
+      {/* Memory panel */}
+      {showMemory && (
+        <div className="mx-4 mb-2 rounded-2xl border border-violet-200 bg-violet-50/60 overflow-hidden shrink-0">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-violet-200">
+            <div className="flex items-center gap-2">
+              <Brain className="w-3.5 h-3.5 text-violet-600" />
+              <p className="text-xs font-bold text-violet-800">What Zion Remembers About You</p>
+            </div>
+            <button onClick={() => setShowMemory(false)} className="text-violet-400 hover:text-violet-700">
+              <XIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="max-h-48 overflow-y-auto p-2 space-y-1.5">
+            {memories.length === 0 ? (
+              <p className="text-[11px] text-center text-violet-400 py-3">
+                No memories yet — Zion learns from your conversations over time.
+              </p>
+            ) : (
+              memories.map(m => (
+                <div key={m.key_name} className="flex items-start gap-2 group">
+                  <div className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 mt-0.5 ${
+                    m.category === "preference" ? "bg-emerald-100 text-emerald-700" :
+                    m.category === "pattern"    ? "bg-blue-100 text-blue-700" :
+                    m.category === "insight"    ? "bg-amber-100 text-amber-700" :
+                    "bg-gray-100 text-gray-600"
+                  }`}>{m.category}</div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] text-violet-900 leading-relaxed">{m.value}</p>
+                    <p className="text-[9px] text-violet-400">{m.key_name}</p>
+                  </div>
+                  <button
+                    onClick={() => deleteMemoryMutation.mutate({ keyName: m.key_name })}
+                    className="opacity-0 group-hover:opacity-100 text-violet-300 hover:text-red-500 transition-all shrink-0 mt-0.5"
+                    title="Forget this"
+                  >
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="px-3 py-1.5 border-t border-violet-200 bg-violet-100/50">
+            <p className="text-[9px] text-violet-400 text-center">
+              Zion learns from your conversations. Hover a memory to delete it.
+            </p>
+          </div>
         </div>
       )}
-      {activePanel === "chiefofstaff" && (
-        <div className="shrink-0">
-          <ChiefOfStaffPanel onClose={() => setActivePanel(null)} />
-        </div>
-      )}
+
 
       {/* Messages */}
       <div

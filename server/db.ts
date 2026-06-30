@@ -188,6 +188,70 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // ── Security: Audit log — ISO 27001 A.12.4, SOC 2 CC7.1 ──────────────────
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`audit_log\` (
+        \`id\`        BIGINT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\`    INT,
+        \`event\`     VARCHAR(100) NOT NULL,
+        \`category\`  ENUM('auth','data','admin','security') NOT NULL DEFAULT 'auth',
+        \`outcome\`   ENUM('success','failure','blocked') NOT NULL DEFAULT 'success',
+        \`ip\`        VARCHAR(64),
+        \`userAgent\` VARCHAR(500),
+        \`detail\`    JSON,
+        \`requestId\` VARCHAR(36),
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`idx_userId\`   (\`userId\`),
+        INDEX \`idx_event\`    (\`event\`),
+        INDEX \`idx_outcome\`  (\`outcome\`),
+        INDEX \`idx_createdAt\` (\`createdAt\`)
+      )
+    `);
+
+    // ── Security: Login attempts — account lockout (Essential 8, SOC 2 CC6.2) ─
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`login_attempts\` (
+        \`id\`        BIGINT AUTO_INCREMENT PRIMARY KEY,
+        \`email\`     VARCHAR(255) NOT NULL,
+        \`ip\`        VARCHAR(64),
+        \`success\`   TINYINT(1) DEFAULT 0,
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`idx_email_time\` (\`email\`, \`createdAt\`),
+        INDEX \`idx_ip_time\`    (\`ip\`, \`createdAt\`)
+      )
+    `);
+
+    // Zion memory table — stores learned preferences, patterns, insights
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`zion_memory\` (
+        \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\` INT NOT NULL,
+        \`category\` ENUM('preference','pattern','insight','fact') NOT NULL DEFAULT 'fact',
+        \`key_name\` VARCHAR(255) NOT NULL,
+        \`value\` TEXT NOT NULL,
+        \`confidence\` FLOAT DEFAULT 1.0,
+        \`observedCount\` INT DEFAULT 1,
+        \`lastObservedAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY \`uq_user_key\` (\`userId\`, \`key_name\`(200)),
+        INDEX \`idx_user\` (\`userId\`)
+      )
+    `);
+
+    // Scheduler log table — tracks sent autonomous emails to avoid duplicates
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`scheduler_log\` (
+        \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\` INT NOT NULL,
+        \`jobType\` VARCHAR(50) NOT NULL,
+        \`dateKey\` VARCHAR(20) NOT NULL,
+        \`sentAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY \`uq_job_date\` (\`userId\`, \`jobType\`, \`dateKey\`),
+        INDEX \`idx_user_job\` (\`userId\`, \`jobType\`)
+      )
+    `);
+
     for (const { table, column, ddl } of checks) {
       const [rows] = await conn.query(
         `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
@@ -1765,6 +1829,349 @@ export async function getAllPushSubscriptionsForReminders(): Promise<Array<{
       `SELECT userId, endpoint, p256dh, auth FROM \`push_subscriptions\``
     );
     return rows as any[];
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── Streak tracking ──────────────────────────────────────────────────────────
+export async function getUserStreak(userId: number): Promise<{
+  currentStreak: number;
+  longestStreak: number;
+  lastActiveDate: string | null;
+  isActiveToday: boolean;
+  streakBroken: boolean; // true if yesterday was missed but user WAS active before
+}> {
+  const pool = getPool();
+  const empty = { currentStreak: 0, longestStreak: 0, lastActiveDate: null, isActiveToday: false, streakBroken: false };
+  if (!pool) return empty;
+  const conn = await pool.getConnection();
+  try {
+    // Collect all distinct dates with any user activity in last 365 days
+    const [rows] = await conn.query(`
+      SELECT activity_date FROM (
+        SELECT DATE(createdAt) AS activity_date
+          FROM zion_messages WHERE userId = ? AND role = 'user'
+        UNION
+        SELECT date AS activity_date
+          FROM daily_entries WHERE userId = ?
+        UNION
+        SELECT date AS activity_date
+          FROM daily_check_ins WHERE userId = ?
+      ) AS combined
+      WHERE activity_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+      GROUP BY activity_date
+      ORDER BY activity_date DESC
+    `, [userId, userId, userId]);
+
+    const dates: string[] = (rows as any[]).map(r => {
+      const d = r.activity_date;
+      if (d instanceof Date) return d.toISOString().slice(0, 10);
+      return String(d);
+    });
+
+    if (dates.length === 0) return empty;
+
+    const dateSet = new Set(dates);
+    const today = new Date();
+    const todayStr = today.toISOString().slice(0, 10);
+    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+    const isActiveToday = dateSet.has(todayStr);
+    const lastActiveDate = dates[0]; // most recent
+
+    // Current streak: walk backwards from today (or yesterday if not active today)
+    let currentStreak = 0;
+    const cursor = new Date(today);
+    if (!isActiveToday) cursor.setDate(cursor.getDate() - 1);
+    for (let i = 0; i < 365; i++) {
+      const ds = cursor.toISOString().slice(0, 10);
+      if (dateSet.has(ds)) { currentStreak++; cursor.setDate(cursor.getDate() - 1); }
+      else break;
+    }
+
+    // Streak is broken if user was active at some point but missed yesterday (and today too)
+    const streakBroken = currentStreak === 0 && lastActiveDate !== null && !dateSet.has(yesterdayStr) && !isActiveToday;
+
+    // Longest streak (all-time)
+    const sorted = Array.from(dateSet).sort();
+    let longest = 0, temp = 1;
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = new Date(sorted[i - 1] + "T12:00:00Z");
+      const curr = new Date(sorted[i] + "T12:00:00Z");
+      const diff = Math.round((curr.getTime() - prev.getTime()) / 86400000);
+      if (diff === 1) { temp++; } else { longest = Math.max(longest, temp); temp = 1; }
+    }
+    longest = Math.max(longest, temp);
+
+    return { currentStreak, longestStreak: longest, lastActiveDate, isActiveToday, streakBroken };
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getLastStreakNotification(userId: number): Promise<string | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT DATE(createdAt) as d FROM zion_messages
+       WHERE userId = ? AND role = 'assistant' AND content LIKE '%streak%' AND content LIKE '%missed%'
+       ORDER BY createdAt DESC LIMIT 1`,
+      [userId]
+    );
+    const row = (rows as any[])[0];
+    if (!row?.d) return null;
+    const d = row.d instanceof Date ? row.d.toISOString().slice(0, 10) : String(row.d);
+    return d;
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── Zion Memory Functions ────────────────────────────────────────────────────
+
+export type ZionMemoryItem = {
+  id: number;
+  category: "preference" | "pattern" | "insight" | "fact";
+  key_name: string;
+  value: string;
+  confidence: number;
+  observedCount: number;
+  lastObservedAt: string;
+};
+
+export async function getZionMemory(userId: number): Promise<ZionMemoryItem[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT id, category, key_name, value, confidence, observedCount, lastObservedAt
+       FROM \`zion_memory\` WHERE userId = ?
+       ORDER BY confidence DESC, observedCount DESC
+       LIMIT 50`,
+      [userId]
+    );
+    return (rows as any[]).map(r => ({
+      id: r.id,
+      category: r.category as ZionMemoryItem["category"],
+      key_name: r.key_name,
+      value: r.value,
+      confidence: r.confidence,
+      observedCount: r.observedCount,
+      lastObservedAt: r.lastObservedAt instanceof Date ? r.lastObservedAt.toISOString().slice(0,10) : String(r.lastObservedAt ?? ""),
+    }));
+  } finally {
+    conn.release();
+  }
+}
+
+export async function upsertZionMemory(
+  userId: number,
+  category: ZionMemoryItem["category"],
+  keyName: string,
+  value: string,
+  confidence = 1.0
+): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `INSERT INTO \`zion_memory\` (userId, category, key_name, value, confidence, observedCount, lastObservedAt)
+       VALUES (?, ?, ?, ?, ?, 1, NOW())
+       ON DUPLICATE KEY UPDATE
+         value = VALUES(value),
+         confidence = VALUES(confidence),
+         observedCount = observedCount + 1,
+         lastObservedAt = NOW(),
+         updatedAt = NOW()`,
+      [userId, category, keyName.slice(0, 200), value.slice(0, 1000), confidence]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+export async function deleteZionMemory(userId: number, keyName: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(`DELETE FROM \`zion_memory\` WHERE userId = ? AND key_name = ?`, [userId, keyName]);
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── Scheduler Helpers ────────────────────────────────────────────────────────
+
+/** Returns true if this job already ran for this user+dateKey today */
+export async function schedulerAlreadyRan(userId: number, jobType: string, dateKey: string): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT id FROM \`scheduler_log\` WHERE userId = ? AND jobType = ? AND dateKey = ? LIMIT 1`,
+      [userId, jobType, dateKey]
+    );
+    return (rows as any[]).length > 0;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function markSchedulerRan(userId: number, jobType: string, dateKey: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `INSERT IGNORE INTO \`scheduler_log\` (userId, jobType, dateKey) VALUES (?, ?, ?)`,
+      [userId, jobType, dateKey]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+/** Get all users who have been active in the past 60 days and have an email address */
+export async function getActiveUsers(): Promise<Array<{ id: number; name: string | null; email: string; timezone: string | null }>> {
+  const pool = getPool();
+  if (!pool) return [];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT DISTINCT u.id, u.name, u.email, u.timezone
+       FROM \`users\` u
+       WHERE u.email IS NOT NULL
+         AND u.email NOT LIKE '%@bdbplanner.internal'
+         AND u.email NOT LIKE '%@bdbplanner.local'
+         AND EXISTS (
+           SELECT 1 FROM \`zion_messages\` zm WHERE zm.userId = u.id AND zm.createdAt >= DATE_SUB(NOW(), INTERVAL 60 DAY)
+           UNION ALL
+           SELECT 1 FROM \`daily_entries\` de WHERE de.userId = u.id AND de.date >= DATE_FORMAT(DATE_SUB(NOW(), INTERVAL 60 DAY), '%Y-%m-%d')
+           UNION ALL
+           SELECT 1 FROM \`daily_check_ins\` dc WHERE dc.userId = u.id AND dc.date >= DATE_FORMAT(DATE_SUB(NOW(), INTERVAL 60 DAY), '%Y-%m-%d')
+         )`,
+    );
+    return (rows as any[]).map(r => ({
+      id: r.id,
+      name: r.name ?? null,
+      email: r.email as string,
+      timezone: r.timezone ?? null,
+    }));
+  } finally {
+    conn.release();
+  }
+}
+
+/** Check if a user has a daily check-in for a given date */
+export async function hasCheckInForDate(userId: number, date: string): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT id FROM \`daily_check_ins\` WHERE userId = ? AND date = ? LIMIT 1`,
+      [userId, date]
+    );
+    return (rows as any[]).length > 0;
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── GDPR / Privacy Data Rights ───────────────────────────────────────────────
+// ISO 27001 A.18.1.4, App Store / Google Play privacy requirements
+
+/**
+ * Export all data belonging to a user (Right to Access / Data Portability).
+ */
+export async function exportUserData(userId: number): Promise<Record<string, unknown>> {
+  const pool = getPool();
+  if (!pool) return {};
+  const conn = await pool.getConnection();
+  try {
+    const tables: Array<{ key: string; sql: string }> = [
+      { key: "profile",      sql: `SELECT name, email, createdAt FROM \`users\` WHERE id = ?` },
+      { key: "annualPlans",  sql: `SELECT year, data FROM \`annual_plans\` WHERE userId = ?` },
+      { key: "monthlyPlans", sql: `SELECT year, month, data FROM \`monthly_plans\` WHERE userId = ?` },
+      { key: "weeklyPlans",  sql: `SELECT year, weekNumber, data FROM \`weekly_plans\` WHERE userId = ?` },
+      { key: "dailyEntries", sql: `SELECT date, data FROM \`daily_entries\` WHERE userId = ?` },
+      { key: "notes",        sql: `SELECT title, folder, content, createdAt FROM \`notes\` WHERE userId = ?` },
+      { key: "reminders",    sql: `SELECT title, date, timeSlot, createdAt FROM \`reminders\` WHERE userId = ?` },
+      { key: "checkIns",     sql: `SELECT date, rating, note FROM \`daily_check_ins\` WHERE userId = ?` },
+      { key: "zionMemory",   sql: `SELECT category, key_name, value FROM \`zion_memory\` WHERE userId = ?` },
+      { key: "zionMessages", sql: `SELECT role, content, createdAt FROM \`zion_messages\` WHERE userId = ?` },
+    ];
+
+    const result: Record<string, unknown> = {
+      exportedAt: new Date().toISOString(),
+      exportVersion: "1.0",
+    };
+
+    for (const { key, sql } of tables) {
+      try {
+        const [rows] = await conn.query(sql, [userId]);
+        result[key] = rows;
+      } catch {
+        result[key] = [];
+      }
+    }
+
+    return result;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * Permanently erase all personal data for a user (Right to Erasure / GDPR Art. 17).
+ * Anonymises the user row to preserve referential integrity; hard-deletes everything else.
+ */
+export async function deleteUserData(userId: number): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    await conn.query(
+      `UPDATE \`users\` SET
+         name = '[Deleted User]',
+         email = CONCAT('deleted_', id, '@deleted.invalid'),
+         passwordHash = NULL,
+         avatarUrl = NULL,
+         bio = NULL,
+         lastSignedIn = NULL
+       WHERE id = ?`,
+      [userId]
+    );
+
+    const hardDeleteTables = [
+      "annual_plans","monthly_plans","weekly_plans","daily_entries",
+      "notes","reminders","daily_check_ins","zion_messages","zion_memory",
+      "push_subscriptions","user_integrations","scheduler_log","social_accounts",
+    ];
+    for (const table of hardDeleteTables) {
+      try { await conn.query(`DELETE FROM \`${table}\` WHERE userId = ?`, [userId]); } catch { /* non-fatal */ }
+    }
+
+    // Anonymise rather than delete — community threads remain coherent
+    await conn.query(
+      `UPDATE \`community_messages\` SET content = '[Message removed]' WHERE userId = ?`,
+      [userId]
+    );
+
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
   } finally {
     conn.release();
   }

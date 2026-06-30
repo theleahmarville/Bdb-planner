@@ -9,6 +9,16 @@ import { ENV } from "./env";
 import { google } from "googleapis";
 import { sendWelcomeEmail, sendPasswordResetEmail } from "./email";
 import { SignJWT, jwtVerify } from "jose";
+import { auditFromReq, recordLoginAttempt, isLockedOut } from "./auditLog";
+import { validatePasswordStrength, sanitizeString, logSecurityEvent } from "./security";
+
+/** Timing-safe generic error — prevents email enumeration (OWASP A07) */
+const AUTH_ERR = "Invalid email or password";
+
+function getClientIp(req: Request): string {
+  const fwd = req.headers["x-forwarded-for"];
+  return (typeof fwd === "string" ? fwd.split(",")[0].trim() : req.ip) ?? "unknown";
+}
 
 export function registerAuthRoutes(app: Express) {
   // GET /api/auth/google/callback — Google OAuth callback
@@ -162,13 +172,15 @@ export function registerAuthRoutes(app: Express) {
       return;
     }
 
-    if (password.length < 8) {
-      res.status(400).json({ error: "Password must be at least 8 characters" });
+    // ── Password strength (SOC 2 CC6.1, Essential 8) ────────────────────────
+    const strength = validatePasswordStrength(String(password));
+    if (!strength.valid) {
+      res.status(400).json({ error: strength.errors[0], errors: strength.errors });
       return;
     }
 
     try {
-      const existing = await db.getUserByEmail(email);
+      const existing = await db.getUserByEmail(String(email).toLowerCase().trim());
       if (existing) {
         res.status(409).json({ error: "An account with this email already exists" });
         return;
@@ -204,9 +216,8 @@ export function registerAuthRoutes(app: Express) {
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
-      // Send welcome email (non-blocking — never delays registration response)
+      auditFromReq(req, "register.success", "auth", "success", user.id, { method: "email" });
       sendWelcomeEmail(user.email!, user.name || "").catch(() => {});
-
       res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
     } catch (error) {
       console.error("[Auth] Registration failed", error);
@@ -304,29 +315,43 @@ export function registerAuthRoutes(app: Express) {
   // POST /api/auth/login
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     const { email, password } = req.body;
+    const ip = getClientIp(req);
 
     if (!email || !password) {
       res.status(400).json({ error: "Email and password are required" });
       return;
     }
 
+    // ── Account lockout check (Essential 8, SOC 2 CC6.2) ────────────────────
+    if (await isLockedOut(String(email), ip)) {
+      auditFromReq(req, "login.blocked", "auth", "blocked", null, { email: String(email).slice(0, 100) });
+      res.status(429).json({ error: "Too many failed attempts. Please wait 15 minutes and try again." });
+      return;
+    }
+
     try {
-      const user = await db.getUserByEmail(email.toLowerCase());
-      if (!user || !user.passwordHash) {
-        res.status(401).json({ error: "Invalid email or password" });
+      const user = await db.getUserByEmail(String(email).toLowerCase().trim());
+
+      // Always run bcrypt compare even when user not found — prevents timing attacks (OWASP A07)
+      const DUMMY_HASH = "$2b$12$LRkCmMeBnJFl.pVf4tE/ieANBxRV7OaEJbL4z5vXf7HrCDHFUQvMi";
+      const hashToCheck = user?.passwordHash ?? DUMMY_HASH;
+      const valid = await bcrypt.compare(String(password), hashToCheck);
+
+      if (!user || !user.passwordHash || !valid) {
+        const { locked, remaining } = await recordLoginAttempt(String(email), ip, false);
+        auditFromReq(req, "login.failure", "auth", "failure", user?.id ?? null, {
+          email: String(email).slice(0, 100),
+          locked,
+          remainingAttempts: remaining,
+        });
+        logSecurityEvent("login.failure", "failure", { email: String(email).slice(0, 100), ip });
+        const hint = locked ? " Account temporarily locked — try again in 15 minutes." : "";
+        res.status(401).json({ error: AUTH_ERR + hint });
         return;
       }
 
-      const valid = await bcrypt.compare(password, user.passwordHash);
-      if (!valid) {
-        res.status(401).json({ error: "Invalid email or password" });
-        return;
-      }
-
-      await db.upsertUser({
-        openId: user.openId,
-        lastSignedIn: new Date(),
-      });
+      await recordLoginAttempt(String(email), ip, true);
+      await db.upsertUser({ openId: user.openId, lastSignedIn: new Date() });
 
       const sessionToken = await authService.createSessionToken(
         { id: user.id, openId: user.openId, name: user.name },
@@ -336,10 +361,60 @@ export function registerAuthRoutes(app: Express) {
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
+      auditFromReq(req, "login.success", "auth", "success", user.id, { method: "email" });
       res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
     } catch (error) {
       console.error("[Auth] Login failed", error);
       res.status(500).json({ error: "Login failed" });
+    }
+  });
+
+  // DELETE /api/auth/account — Right to Erasure (GDPR Art. 17, App Store requirement)
+  app.delete("/api/auth/account", async (req: Request, res: Response) => {
+    try {
+      const user = await authService.authenticateRequest(req);
+      if (!user) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+      const { password } = req.body;
+      const dbUser = await db.getUserByOpenId(user.openId);
+      if (!dbUser) { res.status(404).json({ error: "User not found" }); return; }
+
+      // Require password confirmation before erasure
+      if (dbUser.passwordHash) {
+        if (!password) { res.status(400).json({ error: "Password required to delete account" }); return; }
+        const valid = await bcrypt.compare(String(password), dbUser.passwordHash);
+        if (!valid) { res.status(401).json({ error: "Incorrect password" }); return; }
+      }
+
+      auditFromReq(req, "account.delete", "data", "success", dbUser.id, { email: dbUser.email });
+      await db.deleteUserData(dbUser.id);
+
+      // Clear session cookie
+      res.clearCookie(COOKIE_NAME);
+      res.json({ success: true, message: "Your account and all data have been permanently deleted." });
+    } catch (error) {
+      console.error("[Auth] Account deletion failed", error);
+      res.status(500).json({ error: "Account deletion failed" });
+    }
+  });
+
+  // GET /api/auth/export — Right to Data Portability (GDPR Art. 20, App Store requirement)
+  app.get("/api/auth/export", async (req: Request, res: Response) => {
+    try {
+      const user = await authService.authenticateRequest(req);
+      if (!user) { res.status(401).json({ error: "Not authenticated" }); return; }
+      const dbUser = await db.getUserByOpenId(user.openId);
+      if (!dbUser) { res.status(404).json({ error: "User not found" }); return; }
+
+      auditFromReq(req, "data.export", "data", "success", dbUser.id);
+      const data = await db.exportUserData(dbUser.id);
+
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="bdb-data-export-${new Date().toISOString().slice(0,10)}.json"`);
+      res.json(data);
+    } catch (error) {
+      console.error("[Auth] Data export failed", error);
+      res.status(500).json({ error: "Data export failed" });
     }
   });
 }
