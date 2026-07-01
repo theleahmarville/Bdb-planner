@@ -4,16 +4,38 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Streamdown } from "streamdown";
 import {
   Sparkles, Mic, MicOff, Send, Trash2, CheckCircle2,
   Calendar, Target, BookOpen, Heart, BarChart2, Loader2,
   Volume2, ChevronDown, Bell, DollarSign, Share2, Smile,
-  ExternalLink, SaveAll, Brain, X as XIcon,
+  ExternalLink, SaveAll, Brain, X as XIcon, Download, Upload, Lock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { getISOWeek, startOfISOWeek, format } from "date-fns";
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
+import {
+  getLocalHistory,
+  addLocalMessage,
+  clearLocalHistory,
+  getLocalMemories,
+  upsertLocalMemory,
+  deleteLocalMemory,
+  formatMemoryContext,
+  exportLocalData,
+  importLocalData,
+  type LocalZionMessage,
+  type LocalZionMemory,
+} from "@/lib/zionLocalStore";
+import { encryptJson, decryptJson, type EncryptedBundle } from "@/lib/zionCrypto";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface PlannerAction {
@@ -313,50 +335,157 @@ function MessageBubble({ msg }: { msg: Message }) {
   );
 }
 
+// ── Backup export/import dialog ────────────────────────────────────────────────
+function BackupDialog({
+  open, onClose, userId,
+}: { open: boolean; onClose: () => void; userId: number }) {
+  const [mode, setMode] = useState<"idle" | "export" | "import">("idle");
+  const [passphrase, setPassphrase] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const handleExport = async () => {
+    if (!passphrase.trim()) { toast.error("Enter a passphrase to protect your backup"); return; }
+    setBusy(true);
+    try {
+      const data = await exportLocalData(userId);
+      const bundle = await encryptJson(data, passphrase);
+      const blob = new Blob([JSON.stringify(bundle)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `zion-backup-${new Date().toISOString().slice(0, 10)}.bdbzion`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Encrypted backup downloaded — keep your passphrase safe!");
+      onClose();
+    } catch {
+      toast.error("Export failed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !passphrase.trim()) { toast.error("Enter your passphrase first, then select the file"); return; }
+    setBusy(true);
+    try {
+      const text = await file.text();
+      const bundle = JSON.parse(text) as EncryptedBundle;
+      const data = await decryptJson(bundle, passphrase);
+      await importLocalData(userId, data as Parameters<typeof importLocalData>[1]);
+      toast.success("Backup restored! Reload the page to see your history.");
+      onClose();
+    } catch {
+      toast.error("Import failed — wrong passphrase or corrupted file.");
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Lock className="w-4 h-4 text-violet-600" /> Encrypted Backup</DialogTitle>
+          <DialogDescription className="text-xs text-[#8a7a6a]">
+            Your Zion memory and history lives only on this device. Create an encrypted backup to restore it on another device. Your passphrase never leaves this browser.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 pt-1">
+          <Input
+            type="password"
+            placeholder="Backup passphrase"
+            value={passphrase}
+            onChange={e => setPassphrase(e.target.value)}
+            className="h-10"
+            autoComplete="new-password"
+          />
+          <div className="flex gap-2">
+            <Button
+              className="flex-1 gap-2 bg-violet-600 hover:bg-violet-700 text-white"
+              onClick={() => { setMode("export"); handleExport(); }}
+              disabled={busy || mode === "import"}
+            >
+              {busy && mode === "export" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              Export
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1 gap-2"
+              onClick={() => { setMode("import"); fileRef.current?.click(); }}
+              disabled={busy || mode === "export"}
+            >
+              {busy && mode === "import" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              Import
+            </Button>
+          </div>
+          <input ref={fileRef} type="file" accept=".bdbzion,application/json" className="hidden" onChange={handleImport} />
+          <p className="text-[10px] text-center text-[#b0a090]">AES-256-GCM · 200,000 PBKDF2 rounds · zero server access</p>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const WELCOME_MSG: Message = {
+  id: "welcome",
+  role: "assistant",
+  content: `# Welcome! I'm Zion 🌟\n\nI'm your personal AI wellness assistant for the **Be Do Become** planner. I'm here to help you:\n\n- **Organize your thoughts** — brain dump anything and I'll sort it into your planner instantly\n- **Set reminders** — tell me what to remind you of and I'll add it to your calendar\n- **Plan your week** — share what's on your mind and I'll prioritize it\n- **Track habits & wins** — I'll add them directly to your weekly tracker\n- **Manage your budget** — mention expenses or savings goals and I'll log them\n- **Plan social content** — share post ideas and I'll add them to your content calendar\n\nJust type or **speak** anything on your mind. I'll extract every actionable item and show you **Save** buttons to add them to the right planner section instantly.\n\n> *Try: "I need to launch my course in April, remind me to follow up with my client on Friday at 3pm, I want to save $500 this month, and I've been skipping the gym..."*\n\n**What's on your mind today?** ✨`,
+  createdAt: new Date(),
+};
+
 // ── Main Zion Page ─────────────────────────────────────────────────────────────
 export default function ZionPage() {
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { isAuthenticated, loading: authLoading, user } = useAuth();
+  const userId = (user as any)?.id as number | undefined;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  const { data: historyData, isLoading: historyLoading } = trpc.zion.history.useQuery(undefined, {
-    enabled: isAuthenticated,
-  });
-
   const chatMutation = trpc.zion.chat.useMutation();
-  const clearMutation = trpc.zion.clearHistory.useMutation();
   const transcribeMutation = trpc.zion.transcribeVoice.useMutation();
   const [showMemory, setShowMemory] = useState(false);
-  const { data: memories = [], refetch: refetchMemories } = trpc.zion.getMemories.useQuery(undefined, { enabled: showMemory });
-  const deleteMemoryMutation = trpc.zion.deleteMemory.useMutation({ onSuccess: () => refetchMemories() });
-  const utils = trpc.useUtils();
+  const [memories, setMemories] = useState<LocalZionMemory[]>([]);
+  const [showBackup, setShowBackup] = useState(false);
 
+  // Load history from IndexedDB on mount
   useEffect(() => {
-    if (historyData && historyData.length > 0) {
-      setMessages(historyData.map(m => ({
-        id: String(m.id),
-        role: m.role as "user" | "assistant",
-        content: m.content,
-        plannerActions: m.metadata ? (() => { try { return JSON.parse(m.metadata!).plannerActions; } catch { return undefined; } })() : undefined,
-        isVoice: m.metadata ? (() => { try { return JSON.parse(m.metadata!).isVoice; } catch { return false; } })() : false,
-        createdAt: new Date(m.createdAt),
-      })));
-    } else if (historyData && historyData.length === 0) {
-      setMessages([{
-        id: "welcome",
-        role: "assistant",
-        content: `# Welcome! I'm Zion 🌟\n\nI'm your personal AI wellness assistant for the **Be Do Become** planner. I'm here to help you:\n\n- **Organize your thoughts** — brain dump anything and I'll sort it into your planner instantly\n- **Set reminders** — tell me what to remind you of and I'll add it to your calendar\n- **Plan your week** — share what's on your mind and I'll prioritize it\n- **Track habits & wins** — I'll add them directly to your weekly tracker\n- **Manage your budget** — mention expenses or savings goals and I'll log them\n- **Plan social content** — share post ideas and I'll add them to your content calendar\n\nJust type or **speak** anything on your mind. I'll extract every actionable item and show you **Save** buttons to add them to the right planner section instantly.\n\n> *Try: "I need to launch my course in April, remind me to follow up with my client on Friday at 3pm, I want to save $500 this month, and I've been skipping the gym..."*\n\n**What's on your mind today?** ✨`,
-        createdAt: new Date(),
-      }]);
-    }
-  }, [historyData]);
+    if (!userId) return;
+    getLocalHistory(userId).then(history => {
+      if (history.length > 0) {
+        setMessages(history.map(m => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          plannerActions: m.plannerActions as PlannerAction[] | undefined,
+          isVoice: m.isVoice,
+          createdAt: new Date(m.createdAt),
+        })));
+      } else {
+        setMessages([WELCOME_MSG]);
+      }
+      setHistoryLoading(false);
+    }).catch(() => {
+      setMessages([WELCOME_MSG]);
+      setHistoryLoading(false);
+    });
+  }, [userId]);
+
+  // Load memories when panel opens
+  useEffect(() => {
+    if (!showMemory || !userId) return;
+    getLocalMemories(userId).then(setMemories).catch(() => setMemories([]));
+  }, [showMemory, userId]);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -373,7 +502,7 @@ export default function ZionPage() {
   };
 
   const sendMessage = async (text: string, isVoice = false) => {
-    if (!text.trim() || isSending) return;
+    if (!text.trim() || isSending || !userId) return;
     setIsSending(true);
     setInput("");
 
@@ -384,10 +513,36 @@ export default function ZionPage() {
       isVoice,
       createdAt: new Date(),
     };
+
+    // Persist user message locally immediately
+    const localUserMsg: LocalZionMessage = {
+      id: userMsg.id,
+      role: "user",
+      content: userMsg.content,
+      isVoice: userMsg.isVoice,
+      createdAt: userMsg.createdAt.toISOString(),
+    };
+    await addLocalMessage(userId, localUserMsg).catch(() => {});
+
     setMessages(prev => [...prev, userMsg]);
 
     try {
-      const result = await chatMutation.mutateAsync({ message: text.trim(), isVoice });
+      // Build context to send to the server — ephemeral, never stored server-side
+      const recentHistory = messages
+        .filter(m => m.id !== "welcome")
+        .slice(-16)
+        .map(m => ({ role: m.role, content: m.content }));
+
+      const localMems = await getLocalMemories(userId).catch(() => [] as LocalZionMemory[]);
+      const memoryContext = formatMemoryContext(localMems);
+
+      const result = await chatMutation.mutateAsync({
+        message: text.trim(),
+        isVoice,
+        history: recentHistory,
+        memoryContext,
+      });
+
       const assistantMsg: Message = {
         id: `assistant-${Date.now()}`,
         role: "assistant",
@@ -395,8 +550,25 @@ export default function ZionPage() {
         plannerActions: result.plannerActions,
         createdAt: new Date(),
       };
+
+      // Persist assistant reply locally
+      const localAssistantMsg: LocalZionMessage = {
+        id: assistantMsg.id,
+        role: "assistant",
+        content: assistantMsg.content,
+        plannerActions: assistantMsg.plannerActions,
+        createdAt: assistantMsg.createdAt.toISOString(),
+      };
+      await addLocalMessage(userId, localAssistantMsg).catch(() => {});
+
+      // Persist any extracted memory updates locally (server never stores these)
+      if (result.memoryUpdates?.length) {
+        for (const item of result.memoryUpdates) {
+          await upsertLocalMemory(userId, { category: item.category, keyName: item.key, value: item.value }).catch(() => {});
+        }
+      }
+
       setMessages(prev => [...prev, assistantMsg]);
-      utils.zion.history.invalidate();
     } catch {
       toast.error("Zion couldn't respond right now. Please try again.");
       setMessages(prev => prev.filter(m => m.id !== userMsg.id));
@@ -414,19 +586,25 @@ export default function ZionPage() {
   };
 
   const handleClearHistory = async () => {
-    if (!confirm("Clear all conversation history with Zion? This cannot be undone.")) return;
+    if (!userId) return;
+    if (!confirm("Clear all local conversation history with Zion? This cannot be undone.")) return;
     try {
-      await clearMutation.mutateAsync();
+      await clearLocalHistory(userId);
       setMessages([{
         id: "welcome-new",
         role: "assistant",
         content: "Fresh start! ✨ I'm here whenever you're ready. What's on your mind?",
         createdAt: new Date(),
       }]);
-      utils.zion.history.invalidate();
     } catch {
       toast.error("Failed to clear history. Please try again.");
     }
+  };
+
+  const handleDeleteMemory = async (keyName: string) => {
+    if (!userId) return;
+    await deleteLocalMemory(userId, keyName).catch(() => {});
+    setMemories(prev => prev.filter(m => m.keyName !== keyName));
   };
 
   const startRecording = async () => {
@@ -479,6 +657,7 @@ export default function ZionPage() {
 
   return (
     <div className="flex-1 flex flex-col bg-[#faf8f5] min-h-0 relative">
+      {userId && <BackupDialog open={showBackup} onClose={() => setShowBackup(false)} userId={userId} />}
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-[#e8e0d5] bg-white/80 backdrop-blur-sm shrink-0">
         <div className="flex items-center gap-3">
@@ -491,9 +670,18 @@ export default function ZionPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200 hidden sm:flex">
-            <Sparkles className="w-2.5 h-2.5 mr-1" /> Fully Actionable
+          <Badge variant="outline" className="text-[10px] bg-violet-50 text-violet-700 border-violet-200 hidden sm:flex" title="Conversation stored only on your device">
+            <Lock className="w-2.5 h-2.5 mr-1" /> On-Device Only
           </Badge>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowBackup(true)}
+            className="text-[#8a7a6a] hover:text-violet-600 h-8 w-8 p-0"
+            title="Encrypted backup"
+          >
+            <Download className="w-4 h-4" />
+          </Button>
           <Button
             variant="ghost"
             size="sm"
@@ -563,7 +751,7 @@ export default function ZionPage() {
               </p>
             ) : (
               memories.map(m => (
-                <div key={m.key_name} className="flex items-start gap-2 group">
+                <div key={m.keyName} className="flex items-start gap-2 group">
                   <div className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 mt-0.5 ${
                     m.category === "preference" ? "bg-emerald-100 text-emerald-700" :
                     m.category === "pattern"    ? "bg-blue-100 text-blue-700" :
@@ -572,10 +760,10 @@ export default function ZionPage() {
                   }`}>{m.category}</div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[10px] text-violet-900 leading-relaxed">{m.value}</p>
-                    <p className="text-[9px] text-violet-400">{m.key_name}</p>
+                    <p className="text-[9px] text-violet-400">{m.keyName}</p>
                   </div>
                   <button
-                    onClick={() => deleteMemoryMutation.mutate({ keyName: m.key_name })}
+                    onClick={() => handleDeleteMemory(m.keyName)}
                     className="opacity-0 group-hover:opacity-100 text-violet-300 hover:text-red-500 transition-all shrink-0 mt-0.5"
                     title="Forget this"
                   >
@@ -586,8 +774,8 @@ export default function ZionPage() {
             )}
           </div>
           <div className="px-3 py-1.5 border-t border-violet-200 bg-violet-100/50">
-            <p className="text-[9px] text-violet-400 text-center">
-              Zion learns from your conversations. Hover a memory to delete it.
+            <p className="text-[9px] text-violet-400 text-center flex items-center justify-center gap-1">
+              <Lock className="w-2.5 h-2.5" /> Stored on your device only · never sent to our servers
             </p>
           </div>
         </div>

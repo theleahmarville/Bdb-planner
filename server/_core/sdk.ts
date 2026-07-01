@@ -87,6 +87,13 @@ class AuthService {
       throw ForbiddenError("User not found");
     }
 
+    // Idle session timeout — force re-authentication after prolonged inactivity
+    // even though the JWT itself is long-lived (SOC 2 CC6.1, Essential 8)
+    const IDLE_TIMEOUT_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+    if (user.lastSignedIn && Date.now() - new Date(user.lastSignedIn).getTime() > IDLE_TIMEOUT_MS) {
+      throw ForbiddenError("Session expired due to inactivity");
+    }
+
     await db.upsertUser({
       openId: user.openId,
       lastSignedIn: new Date(),

@@ -18,7 +18,8 @@ import {
   schedulerAlreadyRan,
   markSchedulerRan,
   hasCheckInForDate,
-  getZionMemory,
+  getInactiveUsers,
+  anonymizeUser,
 } from "./db";
 import { invokeLLM } from "./_core/llm";
 import {
@@ -83,19 +84,9 @@ ${daily}
 ${reminders}`;
 }
 
-/** Format memories into a concise section for LLM */
-async function buildMemorySection(userId: number): Promise<string> {
-  const memories = await getZionMemory(userId);
-  if (!memories.length) return "";
-  const grouped: Record<string, string[]> = {};
-  for (const m of memories) {
-    if (!grouped[m.category]) grouped[m.category] = [];
-    grouped[m.category].push(`• [${m.key_name}] ${m.value}`);
-  }
-  return Object.entries(grouped)
-    .map(([cat, items]) => `${cat.toUpperCase()}S:\n${items.join("\n")}`)
-    .join("\n\n");
-}
+// Memory now lives in the user's browser (IndexedDB). Scheduled emails use
+// only the planner context (goals, weekly/monthly plans, check-ins) — which
+// is already rich personalisation data from the server-side DB.
 
 // ─── Job 1: Morning Briefing ──────────────────────────────────────────────────
 
@@ -110,14 +101,14 @@ async function runMorningBriefings() {
       if (alreadySent) continue;
 
       const context = await buildContextSummary(user.id);
-      const memories = await buildMemorySection(user.id);
+
       const firstName = user.name?.split(" ")[0] || "there";
       const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 
       const prompt = `You are Zion, AI Chief of Staff for ${firstName} on the BDB Digital Wellness Planner.
 Generate a concise, warm morning briefing for ${dateLabel}.
 
-${memories ? `## WHAT YOU KNOW ABOUT ${firstName.toUpperCase()}\n${memories}\n\n` : ""}## PLANNER CONTEXT
+## PLANNER CONTEXT
 ${context}
 
 Write the briefing in these sections (use ## headers):
@@ -190,13 +181,13 @@ async function runSundayReviews() {
       if (alreadySent) continue;
 
       const context = await buildContextSummary(user.id);
-      const memories = await buildMemorySection(user.id);
+
       const firstName = user.name?.split(" ")[0] || "there";
 
       const prompt = `You are Zion, AI Chief of Staff for ${firstName} on the BDB Digital Wellness Planner.
 It's Sunday evening. Generate a warm, strategic week-ahead review for the week of ${weekLabel}.
 
-${memories ? `## WHAT YOU KNOW ABOUT ${firstName.toUpperCase()}\n${memories}\n\n` : ""}## PLANNER CONTEXT
+## PLANNER CONTEXT
 ${context}
 
 Write the review with these sections (use ## headers):
@@ -245,13 +236,13 @@ async function runMonthlyReflections() {
       if (alreadySent) continue;
 
       const context = await buildContextSummary(user.id);
-      const memories = await buildMemorySection(user.id);
+
       const firstName = user.name?.split(" ")[0] || "there";
 
       const prompt = `You are Zion, AI Chief of Staff for ${firstName} on the BDB Digital Wellness Planner.
 ${monthLabel} is ending. Generate a deep, warm monthly reflection.
 
-${memories ? `## WHAT YOU KNOW ABOUT ${firstName.toUpperCase()}\n${memories}\n\n` : ""}## PLANNER CONTEXT (this month's data)
+## PLANNER CONTEXT (this month's data)
 ${context}
 
 Write the reflection with these sections (use ## headers):
@@ -288,6 +279,28 @@ Be deeply personal, warm, and grounded in their actual data. This should feel li
   }
 }
 
+// ─── Job 5: Data Retention (GDPR Art. 5(1)(e), Apple App Store privacy reqs) ──
+// Accounts dormant for 2+ years get their PII scrubbed automatically.
+
+const RETENTION_DAYS = 730;
+
+async function runDataRetention() {
+  console.log("[Scheduler] Running data retention sweep…");
+  try {
+    const dormant = await getInactiveUsers(RETENTION_DAYS);
+    for (const user of dormant) {
+      try {
+        await anonymizeUser(user.id);
+        console.log(`[Scheduler] Anonymized dormant account ${user.id} (inactive ${RETENTION_DAYS}+ days)`);
+      } catch (err) {
+        console.error(`[Scheduler] Failed to anonymize user ${user.id}:`, err);
+      }
+    }
+  } catch (err) {
+    console.error("[Scheduler] Data retention sweep failed:", err);
+  }
+}
+
 // ─── Start All Jobs ────────────────────────────────────────────────────────────
 
 export function startScheduler() {
@@ -310,9 +323,13 @@ export function startScheduler() {
     }
   }, { timezone: TZ });
 
+  // Data retention sweep — 3:00 am on the 1st of every month
+  cron.schedule("0 3 1 * *", () => { runDataRetention().catch(console.error); }, { timezone: TZ });
+
   console.log(`[Scheduler] ✅ Zion autonomous jobs started — timezone: ${TZ}`);
   console.log(`[Scheduler]   • Morning briefing: 7:00 am daily`);
   console.log(`[Scheduler]   • Habit nudge:      9:00 pm daily`);
   console.log(`[Scheduler]   • Sunday review:    8:00 pm Sundays`);
   console.log(`[Scheduler]   • Monthly reflect:  9:00 pm last day of month`);
+  console.log(`[Scheduler]   • Data retention:   3:00 am on the 1st (${RETENTION_DAYS}-day dormancy)`);
 }

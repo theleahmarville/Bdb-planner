@@ -44,9 +44,6 @@ import {
   getNoteAttachments,
   addNoteAttachment,
   deleteNoteAttachment,
-  getZionHistory,
-  saveZionMessage,
-  clearZionHistory,
   getUserPlannerContext,
   getReminders,
   createReminder,
@@ -71,8 +68,6 @@ import {
   upsertUser,
   getUserStreak,
   getLastStreakNotification,
-  getZionMemory,
-  upsertZionMemory,
 } from "./db";
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
@@ -835,11 +830,21 @@ Generate a comprehensive Weekly Digest. Structure it as JSON with these exact fi
 // ─── Zion AI Chat Router ─────────────────────────────────────────────────────
 import { invokeLLM } from "./_core/llm";
 
+export interface ExtractedMemoryItem {
+  category: "preference" | "pattern" | "insight" | "fact";
+  key: string;
+  value: string;
+}
+
 /**
- * Runs after every Zion exchange — extracts memorable facts about the user
- * and persists them to zion_memory. Non-blocking; errors are swallowed.
+ * Runs after every Zion exchange — extracts memorable facts about the user.
+ * Privacy note: this function does NOT persist anything server-side. The
+ * conversation snippet is sent to the LLM purely in-memory for this one
+ * request/response cycle, and the extracted facts are returned to the caller
+ * so the CLIENT can store them locally (IndexedDB) — nothing is written to
+ * our database. Errors are swallowed; memory extraction should never affect UX.
  */
-async function extractAndSaveMemories(userId: number, userMsg: string, assistantMsg: string): Promise<void> {
+async function extractMemories(userMsg: string, assistantMsg: string): Promise<ExtractedMemoryItem[]> {
   try {
     const { invokeLLM: llm } = await import("./_core/llm");
     const result = await llm({
@@ -861,23 +866,25 @@ ASSISTANT: ${assistantMsg.slice(0, 400)}`
     });
 
     const raw = result.choices?.[0]?.message?.content;
-    if (typeof raw !== "string") return;
+    if (typeof raw !== "string") return [];
 
     // Extract JSON from the response (may be wrapped in markdown)
     const jsonMatch = raw.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return;
+    if (!jsonMatch) return [];
 
     const items = JSON.parse(jsonMatch[0]) as Array<{ category: string; key: string; value: string }>;
-    if (!Array.isArray(items)) return;
+    if (!Array.isArray(items)) return [];
 
-    for (const item of items.slice(0, 3)) {
-      if (!item.key || !item.value || typeof item.key !== "string" || typeof item.value !== "string") continue;
-      const validCategories = ["preference", "pattern", "insight", "fact"];
-      const category = validCategories.includes(item.category) ? item.category as "preference" | "pattern" | "insight" | "fact" : "fact";
-      await upsertZionMemory(userId, category, item.key.slice(0, 200), item.value.slice(0, 500));
-    }
+    const validCategories = ["preference", "pattern", "insight", "fact"];
+    return items.slice(0, 3)
+      .filter(item => item.key && item.value && typeof item.key === "string" && typeof item.value === "string")
+      .map(item => ({
+        category: (validCategories.includes(item.category) ? item.category : "fact") as ExtractedMemoryItem["category"],
+        key: item.key.slice(0, 200),
+        value: item.value.slice(0, 500),
+      }));
   } catch {
-    // Silently swallow — memory extraction should never affect UX
+    return [];
   }
 }
 
@@ -961,12 +968,13 @@ Rules:
     };
   }),
 
-  history: protectedProcedure.query(async ({ ctx }) => {
-    return getZionHistory(ctx.user.id, 60);
+  history: protectedProcedure.query(async () => {
+    // Deprecated — conversation history now lives in client IndexedDB.
+    return [];
   }),
 
-  clearHistory: protectedProcedure.mutation(async ({ ctx }) => {
-    await clearZionHistory(ctx.user.id);
+  clearHistory: protectedProcedure.mutation(async () => {
+    // Deprecated — history is cleared locally by the client.
     return { success: true };
   }),
 
@@ -974,16 +982,20 @@ Rules:
     .input(z.object({
       message: z.string().min(1).max(10000),
       isVoice: z.boolean().optional().default(false),
+      // Client sends its own history and memory so the server never needs to
+      // read from the database for personalisation data — it's all ephemeral.
+      history: z.array(z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string().max(8000),
+      })).max(32).optional().default([]),
+      memoryContext: z.string().max(4000).optional().default(""),
     }))
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.user.id;
 
-      // Save the user message
-      await saveZionMessage({ userId, role: "user", content: input.message, metadata: input.isVoice ? JSON.stringify({ isVoice: true }) : null });
-
-      // Get rich planner context
+      // Get rich planner context (non-conversation; stays server-side for multi-device sync)
       const context = await getUserPlannerContext(userId);
-      const history = await getZionHistory(userId, 20);
+      const history = input.history;
 
       // ── Build rich context strings ────────────────────────────────────────
       const today = context.now.toISOString().slice(0, 10);
@@ -1048,10 +1060,9 @@ Rules:
         ? context.recentNotes.map(n => `  • [${n.folder || 'General'}] ${n.title}: ${(n.content || '').slice(0, 100)}`).join('\n')
         : '  (No notes yet)';
 
-      // ── Load Zion's memory about this user ────────────────────────────────
-      const memories = await getZionMemory(userId);
-      const memoriesContext = memories.length
-        ? memories.map(m => `  [${m.category}] ${m.key_name}: ${m.value}`).join('\n')
+      // ── Memory context sent by the client (lives in their IndexedDB) ──────
+      const memoriesContext = input.memoryContext?.trim()
+        ? input.memoryContext
         : '  (No learned preferences yet — this is being built over time)';
 
       const systemPrompt = `You are Zion, a warm, encouraging, and deeply intuitive AI wellness assistant for the Be Do Become Wellness platform by Leah Marville. You have FULL ACCESS to the user's planner data AND a growing memory of their preferences, patterns, and habits — use both intelligently in every response.
@@ -1141,10 +1152,10 @@ RULES:
 3. Be generous — extract every actionable item
 4. Always reference actual planner data when answering questions about progress or schedule`;
 
-      // Build message history for context
+      // Build message history — client-supplied recent turns (already sliced client-side)
       const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
         { role: 'system', content: systemPrompt },
-        ...history.slice(-16).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+        ...history.map(m => ({ role: m.role, content: m.content })),
         { role: 'user', content: input.message },
       ];
 
@@ -1169,18 +1180,12 @@ RULES:
         displayContent = rawContent.replace(/<PLANNER_ACTIONS>[\s\S]*?<\/PLANNER_ACTIONS>/, '').trim();
       }
 
-      // Save assistant response
-      await saveZionMessage({
-        userId,
-        role: 'assistant',
-        content: displayContent,
-        metadata: plannerActions.length > 0 ? JSON.stringify({ plannerActions }) : null,
-      });
+      // ── Memory extraction — returns facts to the CLIENT to persist locally ──
+      // Nothing is written to the server database. The message content and any
+      // extracted facts only live in the user's IndexedDB from this point on.
+      const memoryUpdates = await extractMemories(input.message, displayContent);
 
-      // ── Background memory extraction (non-blocking) ───────────────────────
-      extractAndSaveMemories(userId, input.message, displayContent).catch(() => {});
-
-      return { content: displayContent, plannerActions };
+      return { content: displayContent, plannerActions, memoryUpdates };
     }),
 
   transcribeVoice: protectedProcedure
@@ -1626,14 +1631,8 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
     ];
     const msg = messages[Math.floor(Math.random() * messages.length)];
 
-    await saveZionMessage({
-      userId: ctx.user.id,
-      role: "assistant",
-      content: `## Your streak was broken — but you're back! 💪\n\n${msg}`,
-      metadata: JSON.stringify({ type: "streak_break_notification" }),
-    });
-
-    return { notified: true, streak };
+    // Return the message to the client to persist locally — server never stores it
+    return { notified: true, streak, notificationContent: `## Your streak was broken — but you're back! 💪\n\n${msg}` };
   }),
 
   // ── Chief of Staff: structured daily briefing ────────────────────────────
@@ -1754,21 +1753,8 @@ Keep each section tight — max 3-4 bullet points. Tone: warm, direct, executive
       return { briefing, dateLabel, hasEmails: !!emailContext };
     }),
 
-  // ── Memory management ─────────────────────────────────────────────────────
-
-  /** List Zion's memories for the current user */
-  getMemories: protectedProcedure.query(async ({ ctx }) => {
-    return getZionMemory(ctx.user.id);
-  }),
-
-  /** Delete a specific memory entry */
-  deleteMemory: protectedProcedure
-    .input(z.object({ keyName: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      const { deleteZionMemory } = await import("./db");
-      await deleteZionMemory(ctx.user.id, input.keyName);
-      return { success: true };
-    }),
+  // NOTE: getMemories and deleteMemory were removed — memory is now stored
+  // exclusively in the user's browser (IndexedDB) and never on the server.
 });
 
 // ─── Daily Devotion Router ──────────────────────────────────────────────────

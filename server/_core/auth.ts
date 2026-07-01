@@ -8,16 +8,40 @@ import { authService } from "./sdk";
 import { ENV } from "./env";
 import { google } from "googleapis";
 import { sendWelcomeEmail, sendPasswordResetEmail } from "./email";
-import { SignJWT, jwtVerify } from "jose";
+import { SignJWT, jwtVerify, createRemoteJWKSet } from "jose";
 import { auditFromReq, recordLoginAttempt, isLockedOut } from "./auditLog";
 import { validatePasswordStrength, sanitizeString, logSecurityEvent } from "./security";
 
 /** Timing-safe generic error — prevents email enumeration (OWASP A07) */
 const AUTH_ERR = "Invalid email or password";
 
+/** Apple's public key set for verifying Sign in with Apple identity tokens */
+const APPLE_JWKS = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
+
+/** COPPA — must be 13+ to create an account without parental consent */
+const MIN_AGE_YEARS = 13;
+
 function getClientIp(req: Request): string {
   const fwd = req.headers["x-forwarded-for"];
   return (typeof fwd === "string" ? fwd.split(",")[0].trim() : req.ip) ?? "unknown";
+}
+
+/** Returns null if valid, or an error string */
+function validateAge(dateOfBirth: unknown): string | null {
+  if (!dateOfBirth || typeof dateOfBirth !== "string") {
+    return "Date of birth is required";
+  }
+  const dob = new Date(dateOfBirth);
+  if (isNaN(dob.getTime())) return "Invalid date of birth";
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const monthDiff = today.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) age--;
+  if (age < MIN_AGE_YEARS) {
+    return `You must be at least ${MIN_AGE_YEARS} years old to create an account`;
+  }
+  if (age > 120) return "Invalid date of birth";
+  return null;
 }
 
 export function registerAuthRoutes(app: Express) {
@@ -165,10 +189,17 @@ export function registerAuthRoutes(app: Express) {
 
   // POST /api/auth/register
   app.post("/api/auth/register", async (req: Request, res: Response) => {
-    const { email, password, name, gender } = req.body;
+    const { email, password, name, gender, dateOfBirth } = req.body;
 
     if (!email || !password) {
       res.status(400).json({ error: "Email and password are required" });
+      return;
+    }
+
+    // ── Age gate (COPPA — under-13s may not self-register) ──────────────────
+    const ageError = validateAge(dateOfBirth);
+    if (ageError) {
+      res.status(400).json({ error: ageError });
       return;
     }
 
@@ -199,6 +230,7 @@ export function registerAuthRoutes(app: Express) {
         loginMethod: "email",
         role: isAdmin ? "admin" : "user",
         gender: validGenders.includes(gender) ? gender : "other",
+        dateOfBirth: String(dateOfBirth),
         lastSignedIn: new Date(),
       } as any);
 
@@ -309,6 +341,90 @@ export function registerAuthRoutes(app: Express) {
     } catch (error) {
       console.error("[Auth] Profile update failed", error);
       res.status(500).json({ error: "Failed to update profile" });
+    }
+  });
+
+  // POST /api/auth/apple — Sign in with Apple (required by App Store Guideline 4.8
+  // whenever a third-party login like Google is offered)
+  app.post("/api/auth/apple", async (req: Request, res: Response) => {
+    const { identityToken, name, dateOfBirth } = req.body;
+    const clientId = process.env.APPLE_CLIENT_ID; // Services ID / bundle ID configured in Apple Developer
+
+    if (!clientId) {
+      res.status(503).json({ error: "Sign in with Apple is not configured yet" });
+      return;
+    }
+    if (!identityToken) {
+      res.status(400).json({ error: "Missing Apple identity token" });
+      return;
+    }
+
+    try {
+      const { payload } = await jwtVerify(String(identityToken), APPLE_JWKS, {
+        issuer: "https://appleid.apple.com",
+        audience: clientId,
+      });
+
+      const appleSub = payload.sub as string | undefined;
+      const appleEmail = (payload.email as string | undefined)?.toLowerCase();
+      if (!appleSub) {
+        res.status(400).json({ error: "Invalid Apple identity token" });
+        return;
+      }
+
+      let user = await db.getUserByAppleId(appleSub);
+
+      if (!user && appleEmail) {
+        // Link to an existing email/password account on first Apple sign-in
+        const existing = await db.getUserByEmail(appleEmail);
+        if (existing) {
+          await db.upsertUser({ openId: existing.openId, appleId: appleSub } as any);
+          user = await db.getUserByOpenId(existing.openId);
+        }
+      }
+
+      if (!user) {
+        // New account — Apple only sends `email`/name on the very first authorization
+        const ageError = validateAge(dateOfBirth);
+        if (ageError) {
+          res.status(400).json({ error: ageError });
+          return;
+        }
+        const openId = nanoid(21);
+        const isAdmin = !!(ENV.adminEmail && appleEmail && appleEmail === ENV.adminEmail.toLowerCase());
+        await db.upsertUser({
+          openId,
+          name: name || null,
+          email: appleEmail || null,
+          appleId: appleSub,
+          loginMethod: "apple",
+          role: isAdmin ? "admin" : "user",
+          dateOfBirth: dateOfBirth ? String(dateOfBirth) : undefined,
+          lastSignedIn: new Date(),
+        } as any);
+        user = await db.getUserByOpenId(openId);
+      }
+
+      if (!user) {
+        res.status(500).json({ error: "Failed to create or link account" });
+        return;
+      }
+
+      await db.upsertUser({ openId: user.openId, lastSignedIn: new Date() });
+
+      const sessionToken = await authService.createSessionToken(
+        { id: user.id, openId: user.openId, name: user.name },
+        { expiresInMs: ONE_YEAR_MS }
+      );
+      const cookieOptions = getSessionCookieOptions(req);
+      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+
+      auditFromReq(req, "login.success", "auth", "success", user.id, { method: "apple" });
+      res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
+    } catch (error) {
+      console.error("[Auth] Sign in with Apple failed", error);
+      auditFromReq(req, "login.failure", "auth", "failure", null, { method: "apple" });
+      res.status(401).json({ error: "Sign in with Apple failed" });
     }
   });
 

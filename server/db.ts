@@ -1,4 +1,4 @@
-import { eq, and, or, like, gte, lte, isNull } from "drizzle-orm";
+import { eq, and, or, like, gte, lte, lt, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { DefaultLogger, LogWriter } from "drizzle-orm/logger";
 import mysql from "mysql2/promise";
@@ -148,6 +148,9 @@ export async function ensureSchema(): Promise<void> {
       { table: "social_accounts", column: "contentNiche", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `contentNiche` VARCHAR(100) DEFAULT NULL" },
       { table: "social_accounts", column: "contentGoal", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `contentGoal` VARCHAR(200) DEFAULT NULL" },
       { table: "user_integrations", column: "gmailEnabled", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `gmailEnabled` TINYINT(1) NOT NULL DEFAULT 0" },
+      { table: "users", column: "dateOfBirth", ddl: "ALTER TABLE `users` ADD COLUMN `dateOfBirth` VARCHAR(10) DEFAULT NULL" },
+      { table: "users", column: "appleId", ddl: "ALTER TABLE `users` ADD COLUMN `appleId` VARCHAR(255) DEFAULT NULL" },
+      { table: "users", column: "anonymizedAt", ddl: "ALTER TABLE `users` ADD COLUMN `anonymizedAt` DATETIME DEFAULT NULL" },
     ];
 
     // Create community tables if they don't exist
@@ -298,7 +301,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     }
-    const extraFields = ["gender", "avatarUrl", "bio", "timezone", "onboardingCompleted"] as const;
+    const extraFields = ["gender", "avatarUrl", "bio", "timezone", "onboardingCompleted", "dateOfBirth", "appleId"] as const;
     for (const field of extraFields) {
       if ((user as any)[field] !== undefined) {
         (values as any)[field] = (user as any)[field];
@@ -326,6 +329,41 @@ export async function getUserByEmail(email: string) {
   if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getUserByAppleId(appleId: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.appleId, appleId)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+/** Accounts inactive for `days` or more, excluding ones already anonymized — GDPR/Apple data retention requirement */
+export async function getInactiveUsers(days: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const result = await db
+    .select()
+    .from(users)
+    .where(and(lt(users.lastSignedIn, cutoff), isNull(users.anonymizedAt)));
+  return result;
+}
+
+/** Irreversibly scrubs PII from a long-dormant account while preserving aggregate/anonymous data rows */
+export async function anonymizeUser(userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set({
+    name: "Deleted User",
+    email: `deleted-${userId}@anonymized.local`,
+    passwordHash: null,
+    avatarUrl: null,
+    bio: null,
+    appleId: null,
+    dateOfBirth: null,
+    anonymizedAt: new Date(),
+  }).where(eq(users.id, userId));
 }
 
 // ─── Annual Plans ─────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import OnboardingPage from "./pages/OnboardingPage";
 import CommunityPage from "./pages/CommunityPage";
 import DashboardPage from "./pages/DashboardPage";
 import InvitePage from "./pages/InvitePage";
+import { TermsPage, PrivacyPage } from "./pages/LegalPage";
 import PlannerLayout from "./components/PlannerLayout";
 import { useState } from "react";
 import { getISOWeek, getISOWeekYear } from "date-fns";
@@ -34,7 +35,11 @@ function PlannerRouter() {
   const isResetPassword = location.startsWith("/reset-password");
   const isOnboarding = location === "/onboarding";
   const isInvite = location.startsWith("/invite/");
+  const isTerms = location === "/legal/terms";
+  const isPrivacy = location === "/legal/privacy";
 
+  if (isTerms) return <TermsPage />;
+  if (isPrivacy) return <PrivacyPage />;
   if (isLogin) return <LoginPage />;
   if (isResetPassword) return <ResetPasswordPage />;
   if (isOnboarding) return <OnboardingPage />;

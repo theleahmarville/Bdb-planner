@@ -231,6 +231,37 @@ async function startServer() {
   // Serve local uploads (fallback when S3 is not configured)
   app.use("/uploads", express.static(LOCAL_UPLOADS_DIR));
 
+  // ─── Universal Links / App Links — required for Sign in with Apple deep links ─
+  // Served now so the association files are already indexed by the time the
+  // native app ships; harmless no-op until APPLE_TEAM_ID/APPLE_BUNDLE_ID are set.
+  app.get("/.well-known/apple-app-site-association", (_req, res) => {
+    const teamId = process.env.APPLE_TEAM_ID || "TEAMID";
+    const bundleId = process.env.APPLE_BUNDLE_ID || "com.bedobecome.planner";
+    res.setHeader("Content-Type", "application/json");
+    res.json({
+      applinks: {
+        apps: [],
+        details: [{ appID: `${teamId}.${bundleId}`, paths: ["/reset-password*", "/invite/*"] }],
+      },
+    });
+  });
+  app.get("/.well-known/assetlinks.json", (_req, res) => {
+    const sha256Fingerprints = process.env.ANDROID_SHA256_FINGERPRINTS
+      ? process.env.ANDROID_SHA256_FINGERPRINTS.split(",")
+      : [];
+    res.setHeader("Content-Type", "application/json");
+    res.json([
+      {
+        relation: ["delegate_permission/common.handle_all_urls"],
+        target: {
+          namespace: "android_app",
+          package_name: process.env.ANDROID_PACKAGE_NAME || "com.bedobecome.planner",
+          sha256_cert_fingerprints: sha256Fingerprints,
+        },
+      },
+    ]);
+  });
+
   // Email/password auth routes
   registerAuthRoutes(app);
   // File upload routes (images + PDFs)
@@ -252,6 +283,19 @@ async function startServer() {
     const { serveStatic } = await import("./static");
     serveStatic(app);
   }
+
+  // ─── Global error handler — never leak stack traces / internals in production ─
+  // OWASP A05, ISO 27001 A.14.2.1. Must be registered last, after all routes.
+  app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const requestId = (req as any).__requestId;
+    console.error(`[Error] ${requestId ?? ""}`, err);
+    if (res.headersSent) return;
+    const isProd = process.env.NODE_ENV === "production";
+    res.status(err?.status || err?.statusCode || 500).json({
+      error: isProd ? "Something went wrong. Please try again." : String(err?.message || err),
+      requestId,
+    });
+  });
 
   const port = parseInt(process.env.PORT || "3000");
 
