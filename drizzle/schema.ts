@@ -281,6 +281,13 @@ export const userIntegrations = mysqlTable("user_integrations", {
   // Notion
   notionToken: text("notionToken"),
   notionDatabaseId: varchar("notionDatabaseId", { length: 128 }),
+  // Slack read access (bot token, separate from outbound webhook)
+  slackBotToken: text("slackBotToken"),
+  slackReadChannelIds: text("slackReadChannelIds"), // JSON array of channel IDs
+  // Box
+  boxAccessToken: text("boxAccessToken"),
+  // Granola
+  granolaApiKey: text("granolaApiKey"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

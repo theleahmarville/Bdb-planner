@@ -72,6 +72,7 @@ import {
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 import { nanoid } from "nanoid";
+import { buildZionSystemPrompt } from "./zionPrompt";
 
 // ─── Shared validators ────────────────────────────────────────────────────────
 const zYear = z.number().int().min(2020).max(2030);
@@ -418,23 +419,29 @@ const integrationsRouter = router({
     .input(z.object({
       slackWebhookUrl: z.string().optional(),
       slackChannelName: z.string().optional(),
+      slackBotToken: z.string().optional(),
+      slackReadChannelIds: z.string().optional(),
       googleCalendarId: z.string().optional(),
       googleAccessToken: z.string().optional(),
       googleRefreshToken: z.string().optional(),
       notionToken: z.string().optional(),
       notionDatabaseId: z.string().optional(),
+      boxAccessToken: z.string().optional(),
+      granolaApiKey: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       await upsertUserIntegrations(ctx.user.id, input);
       return { success: true };
     }),
   clear: protectedProcedure
-    .input(z.object({ field: z.enum(["slack", "google", "notion"]) }))
+    .input(z.object({ field: z.enum(["slack", "google", "notion", "box", "granola"]) }))
     .mutation(async ({ ctx, input }) => {
       const clearMap: Record<string, object> = {
-        slack: { slackWebhookUrl: null, slackChannelName: null },
+        slack: { slackWebhookUrl: null, slackChannelName: null, slackBotToken: null, slackReadChannelIds: null },
         google: { googleAccessToken: null, googleRefreshToken: null, googleCalendarId: null, googleTokenExpiry: null },
         notion: { notionToken: null, notionDatabaseId: null },
+        box: { boxAccessToken: null },
+        granola: { granolaApiKey: null },
       };
       await upsertUserIntegrations(ctx.user.id, clearMap[input.field] as any);
       return { success: true };
@@ -844,7 +851,7 @@ export interface ExtractedMemoryItem {
  * so the CLIENT can store them locally (IndexedDB) — nothing is written to
  * our database. Errors are swallowed; memory extraction should never affect UX.
  */
-async function extractMemories(userMsg: string, assistantMsg: string): Promise<ExtractedMemoryItem[]> {
+export async function extractMemories(userMsg: string, assistantMsg: string): Promise<ExtractedMemoryItem[]> {
   try {
     const { invokeLLM: llm } = await import("./_core/llm");
     const result = await llm({
@@ -997,160 +1004,7 @@ Rules:
       const context = await getUserPlannerContext(userId);
       const history = input.history;
 
-      // ── Build rich context strings ────────────────────────────────────────
-      const today = context.now.toISOString().slice(0, 10);
-      const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
-      const goalsContext = context.bigGoals.length
-        ? context.bigGoals.map(g => `  • Goal ${g.position}: ${g.title || '(untitled)'}${g.description ? ` — ${g.description}` : ''}${Array.isArray(g.steps) && g.steps.filter(Boolean).length ? `\n    Steps: ${(g.steps as string[]).filter(Boolean).join(', ')}` : ''}`).join('\n')
-        : '  (No annual goals set yet)';
-
-      const monthlyContext = context.allMonthlyPlans.length
-        ? context.allMonthlyPlans.map(m => {
-            const parts = [];
-            if (m.themeWord) parts.push(`Theme: ${m.themeWord}`);
-            if (m.businessCareerGoals) parts.push(`Business goals: ${m.businessCareerGoals}`);
-            if (m.wellnessGoals) parts.push(`Wellness goals: ${m.wellnessGoals}`);
-            if (m.winsOfWeek) parts.push(`Wins: ${m.winsOfWeek}`);
-            return parts.length ? `  ${monthNames[m.month-1]}: ${parts.join(' | ')}` : null;
-          }).filter(Boolean).join('\n')
-        : '  (No monthly plans logged yet)';
-
-      const weeklyContext = context.weeklyPlan ? [
-        context.weeklyPlan.wordOfWeek && `Word of week: ${context.weeklyPlan.wordOfWeek}`,
-        context.weeklyPlan.weekIntentions && `Intentions: ${context.weeklyPlan.weekIntentions}`,
-        context.weeklyPlan.topBusinessGoals && `Business goals: ${context.weeklyPlan.topBusinessGoals}`,
-        context.weeklyPlan.winsOfWeek && `Wins: ${context.weeklyPlan.winsOfWeek}`,
-        context.weeklyPlan.moneyEarned && `Money earned: ${context.weeklyPlan.moneyEarned}`,
-        context.weeklyPlan.moneySpent && `Money spent: ${context.weeklyPlan.moneySpent}`,
-        context.weeklyPlan.habitTracker && (() => {
-          const ht = context.weeklyPlan!.habitTracker as any;
-          const habits = [];
-          const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-          for (const [key, val] of Object.entries(ht || {})) {
-            if (!val) continue;
-            const v = val as any;
-            const name = v.name || key;
-            const completed = Array.isArray(v.days) ? v.days.filter(Boolean).length : (Array.isArray(val) ? (val as boolean[]).filter(Boolean).length : 0);
-            habits.push(`${name}: ${completed}/7 days`);
-          }
-          return habits.length ? `Habits this week: ${habits.join(', ')}` : null;
-        })(),
-      ].filter(Boolean).join('\n  ') : '  (No weekly plan for this week yet)';
-
-      const dailyContext = context.recentDailyEntries.length
-        ? context.recentDailyEntries.map(d => {
-            const slots = d.timeSlots as Record<string, string> | null;
-            const priorities = d.topPriorities as string[] | null;
-            const parts = [];
-            if (priorities?.filter(Boolean).length) parts.push(`priorities: ${priorities.filter(Boolean).join(', ')}`);
-            if (slots) {
-              const events = Object.entries(slots).filter(([,v]) => v).map(([k,v]) => `${k} ${v}`).join(', ');
-              if (events) parts.push(`schedule: ${events}`);
-            }
-            return parts.length ? `  ${d.date}: ${parts.join(' | ')}` : null;
-          }).filter(Boolean).join('\n')
-        : '  (No daily entries in the past 7 days)';
-
-      const remindersContext = context.upcomingReminders.length
-        ? context.upcomingReminders.map(r => `  • ${r.date} at ${r.timeSlot || '?'}: ${r.title}`).join('\n')
-        : '  (No upcoming reminders)';
-
-      const notesContext = context.recentNotes.length
-        ? context.recentNotes.map(n => `  • [${n.folder || 'General'}] ${n.title}: ${(n.content || '').slice(0, 100)}`).join('\n')
-        : '  (No notes yet)';
-
-      // ── Memory context sent by the client (lives in their IndexedDB) ──────
-      const memoriesContext = input.memoryContext?.trim()
-        ? input.memoryContext
-        : '  (No learned preferences yet — this is being built over time)';
-
-      const systemPrompt = `You are Zion, a warm, encouraging, and deeply intuitive AI wellness assistant for the Be Do Become Wellness platform by Leah Marville. You have FULL ACCESS to the user's planner data AND a growing memory of their preferences, patterns, and habits — use both intelligently in every response.
-
-Today's date: ${today} (Week ${context.weekNumber} of ${context.year})
-
-## YOUR PERSONALITY
-- Warm, empathetic, and motivating — like a wise best friend who keeps you accountable
-- You speak with gentle authority and wisdom
-- You celebrate wins and reframe challenges as growth opportunities
-- You use the Be Do Become framework: who you're BEING, what you're DOING, and who you're BECOMING
-- You remember things — use your memory of this user to personalise every response
-
-## WHAT YOU'VE LEARNED ABOUT THIS USER (your persistent memory)
-${memoriesContext}
-
-## FULL PLANNER DATA (use this to answer any question about the user's life, progress, and schedule)
-
-### ANNUAL BIG GOALS (${context.year})
-${goalsContext}
-
-### MONTHLY PROGRESS (all months logged this year)
-${monthlyContext}
-
-### THIS WEEK (Week ${context.weekNumber}, starting ${context.weekStartDate})
-${weeklyContext}
-
-### LAST 7 DAYS (daily schedule & priorities)
-${dailyContext}
-
-### UPCOMING REMINDERS
-${remindersContext}
-
-### RECENT NOTES
-${notesContext}
-
-## HOW TO USE THIS DATA
-
-**For "How is my year going?" or "Am I hitting my goals?":**
-Look at the Annual Big Goals above. Cross-reference with monthly business/wellness goals and wins logged. Give a specific, honest assessment per goal — celebrate progress, flag what's falling behind, suggest one action per lagging goal.
-
-**For "Summarize my week" or "How did my week go?":**
-Look at "This Week" and "Last 7 Days" above. Summarize: what was scheduled, what priorities were set, habits completed, wins logged, money tracked. Be specific — mention actual items from their data.
-
-**For "What do I have coming up?" or "What's on my calendar?":**
-Reference the Upcoming Reminders and recent daily schedule data. List items clearly by date/time.
-
-**For "What are my habits?" or habit check-ins:**
-Reference the habit tracker data in "This Week". Give completion rates and encouragement.
-
-## CRITICAL RULE — PLANNER_ACTIONS
-Whenever the user shares ANY content that can be organized (goals, tasks, habits, events, reminders, ideas, wins, intentions), you MUST include a <PLANNER_ACTIONS> block at the END of your response. Do NOT ask for confirmation — just do it.
-
-For REMINDERS specifically: ALWAYS include BOTH a 'reminder' action (creates the reminder + adds to calendar) AND optionally a 'schedule' action if a specific day/time is given. The reminder type automatically populates the Reminders section AND the daily calendar.
-
-Response structure for brain dumps / action requests:
-1. Warm 1-2 sentence acknowledgment
-2. Structured summary (bullet points) of what you organised
-3. ONE thoughtful follow-up question
-4. PLANNER_ACTIONS block
-
-For pure questions (summaries, progress checks), respond directly with your analysis — no PLANNER_ACTIONS needed unless you spot something to add.
-
-<PLANNER_ACTIONS> block format (EXACT — valid JSON only, no extra text inside tags):
-<PLANNER_ACTIONS>
-{"actions":[{"type":"reminder","section":"reminders","content":"Go to the gym","reminderDate":"${today}","reminderTime":"18:00"},{"type":"schedule","section":"weekly","content":"Gym","day":"Today","time":"6:00 PM"}]}
-</PLANNER_ACTIONS>
-
-Valid action types:
-- reminder → Reminders list + daily calendar. Fields: content, reminderDate (YYYY-MM-DD), reminderTime (HH:MM)
-- schedule → Daily time slot. Fields: content, day ('Monday'…'Sunday'), time ('9:00 AM')
-- calendar → Calendar entry by date. Fields: content, reminderDate (YYYY-MM-DD), time (HH:MM)
-- goal → Annual Big Goals. Fields: content
-- monthly_goal → Monthly goals. Fields: content, field ('businessCareerGoals' or 'wellnessGoals')
-- priority → Daily top priorities. Fields: content, day
-- habit → Habit tracker. Fields: content (habit name)
-- intention → Weekly intentions. Fields: content
-- win → Weekly wins. Fields: content
-- budget → Monthly budget. Fields: content, budgetCategory ('savings','investment','living','personal','entertainment')
-- social_post → Social media posts. Fields: content, day, platform ('Instagram','TikTok','Twitter',etc.)
-- gratitude → Daily gratitude. Fields: content, day
-- note → Notes. Fields: content, folder ('Ideas','Work','Personal','Goals','Health')
-
-RULES:
-1. Use REAL content from the user's message — never placeholder text
-2. For reminders: reminderDate defaults to today (${today}) if not specified; reminderTime defaults to '09:00'
-3. Be generous — extract every actionable item
-4. Always reference actual planner data when answering questions about progress or schedule`;
+      const systemPrompt = buildZionSystemPrompt(context, input.memoryContext ?? '');
 
       // Build message history — client-supplied recent turns (already sliced client-side)
       const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
@@ -1637,120 +1491,326 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
 
   // ── Chief of Staff: structured daily briefing ────────────────────────────
   chiefOfStaff: protectedProcedure
-    .input(z.object({ date: zDate.optional(), includeEmails: z.boolean().optional() }))
+    .input(z.object({ date: zDate.optional() }))
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.user.id;
       const today = input.date ?? new Date().toISOString().slice(0, 10);
       const todayDate = new Date(today + "T12:00:00Z");
+      const tomorrowDate = new Date(todayDate); tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
       const dayNames = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
       const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
       const dayName = dayNames[todayDate.getUTCDay()];
       const dateLabel = `${dayName}, ${monthNames[todayDate.getUTCMonth()]} ${todayDate.getUTCDate()}, ${todayDate.getUTCFullYear()}`;
 
-      // Gather planner data
-      const context = await getUserPlannerContext(userId);
-      const todayEntry = context.recentDailyEntries.find((e: any) => e.date === today);
-      const upcomingReminders = context.upcomingReminders.slice(0, 5);
+      const [context, integration] = await Promise.all([
+        getUserPlannerContext(userId),
+        getUserIntegrations(userId),
+      ]);
 
-      // Weekly priorities & schedule
+      // ── Build planner context strings ─────────────────────────────────────
       const weeklyPlan = context.weeklyPlan as any;
       const priorities: string[] = [];
       const schedule: string[] = [];
       if (weeklyPlan) {
         const dayKey = dayName.toLowerCase();
         const slots = weeklyPlan[dayKey] ?? {};
-        Object.entries(slots).forEach(([time, val]: any) => {
-          if (val?.name) schedule.push(`${time}: ${val.name}`);
-        });
-        const weekPriorities = weeklyPlan.priorities ?? [];
-        weekPriorities.slice(0, 3).forEach((p: any) => {
-          if (p?.text) priorities.push(p.text);
-        });
+        Object.entries(slots).forEach(([time, val]: any) => { if (val?.name) schedule.push(`${time}: ${val.name}`); });
+        (weeklyPlan.priorities ?? []).slice(0, 3).forEach((p: any) => { if (p?.text) priorities.push(p.text); });
       }
+      const bigGoals = (context.bigGoals as any[]).slice(0, 5).map((g: any) => g.title).filter(Boolean);
+      const reminderLines = context.upcomingReminders.slice(0, 5)
+        .map((r: any) => `- ${r.title}${r.date ? ` (${r.date})` : ""}`)
+        .join("\n") || "None";
 
-      // Today's tasks from daily entry
-      const todayTasks: string[] = [];
-      if (todayEntry) {
-        const tasks = (todayEntry as any).tasks ?? [];
-        tasks.slice(0, 5).forEach((t: any) => { if (t?.text) todayTasks.push(t.text); });
-      }
+      // ── Integration fetches (all best-effort, parallel) ───────────────────
+      type GmailItem = { from: string; subject: string; isDraft?: boolean };
+      type CalendarEvent = { title: string; start: string; end?: string };
+      type SlackMessage = { channel: string; user: string; text: string };
+      type NotionPage = { title: string; url: string; lastEdited: string };
+      type BoxFile = { name: string; path: string; modified: string };
 
-      // Optionally fetch emails
-      let emailContext = "";
-      if (input.includeEmails) {
+      let gmailItems: GmailItem[] = [];
+      let calendarEvents: CalendarEvent[] = [];
+      let granolaItems: GmailItem[] = [];
+      let slackMessages: SlackMessage[] = [];
+      let notionPages: NotionPage[] = [];
+      let boxFiles: BoxFile[] = [];
+
+      const hasGoogle = !!(integration?.googleAccessToken);
+
+      let googleOAuth2: any = null;
+      if (hasGoogle) {
         try {
-          const integration = await getUserIntegrations(userId);
-          if (integration?.gmailEnabled && integration.googleAccessToken) {
+          const { google } = await import("googleapis");
+          googleOAuth2 = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI,
+          );
+          googleOAuth2.setCredentials({
+            access_token: integration!.googleAccessToken,
+            refresh_token: integration!.googleRefreshToken ?? undefined,
+          });
+        } catch { googleOAuth2 = null; }
+      }
+
+      await Promise.all([
+        // 📪 Gmail — unread important emails from last 48h
+        (async () => {
+          if (!googleOAuth2 || !integration?.gmailEnabled) return;
+          try {
             const { google } = await import("googleapis");
-            const oauth2Client = new google.auth.OAuth2(
-              process.env.GOOGLE_CLIENT_ID,
-              process.env.GOOGLE_CLIENT_SECRET,
-              process.env.GOOGLE_REDIRECT_URI
-            );
-            oauth2Client.setCredentials({
-              access_token: integration.googleAccessToken,
-              refresh_token: integration.googleRefreshToken ?? undefined,
-            });
-            const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-            const nextDay = new Date(todayDate); nextDay.setUTCDate(nextDay.getUTCDate() + 1);
-            const q = `after:${today.replace(/-/g, "/")} before:${nextDay.toISOString().slice(0,10).replace(/-/g,"/")} -category:promotions -category:social`;
-            const listRes = await gmail.users.messages.list({ userId: "me", q, maxResults: 10 });
+            const gmail = google.gmail({ version: "v1", auth: googleOAuth2 });
+            const q = `is:unread -category:promotions -category:social newer_than:2d`;
+            const listRes = await gmail.users.messages.list({ userId: "me", q, maxResults: 12 });
             const msgs = listRes.data.messages ?? [];
-            if (msgs.length > 0) {
-              const details = await Promise.all(msgs.slice(0, 8).map(async (m) => {
+            if (msgs.length === 0) return;
+            const details = await Promise.all(msgs.slice(0, 10).map(async (m) => {
+              try {
+                const d = await gmail.users.messages.get({ userId: "me", id: m.id!, format: "metadata", metadataHeaders: ["Subject","From"] });
+                const h = d.data.payload?.headers ?? [];
+                return {
+                  from: h.find((x: any) => x.name === "From")?.value ?? "Unknown",
+                  subject: h.find((x: any) => x.name === "Subject")?.value ?? "(no subject)",
+                };
+              } catch { return null; }
+            }));
+            gmailItems = details.filter(Boolean) as GmailItem[];
+
+            // Granola detection — emails from granola.ai or with meeting-notes subjects
+            const granolaQ = `from:team@granola.ai OR subject:"Meeting Notes:" newer_than:7d`;
+            const granolaRes = await gmail.users.messages.list({ userId: "me", q: granolaQ, maxResults: 5 });
+            const granolaM = granolaRes.data.messages ?? [];
+            if (granolaM.length > 0) {
+              const gd = await Promise.all(granolaM.map(async (m) => {
                 try {
-                  const d = await gmail.users.messages.get({ userId: "me", id: m.id!, format: "metadata", metadataHeaders: ["Subject","From"] });
+                  const d = await gmail.users.messages.get({ userId: "me", id: m.id!, format: "metadata", metadataHeaders: ["Subject","From","Date"] });
                   const h = d.data.payload?.headers ?? [];
-                  return `- ${h.find((x:any) => x.name==="From")?.value ?? "?"}: ${h.find((x:any) => x.name==="Subject")?.value ?? "(no subject)"}`;
+                  return {
+                    from: h.find((x: any) => x.name === "From")?.value ?? "Granola",
+                    subject: h.find((x: any) => x.name === "Subject")?.value ?? "Meeting Notes",
+                  };
                 } catch { return null; }
               }));
-              emailContext = `\n\nEmails today (${msgs.length}):\n${details.filter(Boolean).join("\n")}`;
+              granolaItems = gd.filter(Boolean) as GmailItem[];
             }
-          }
-        } catch { /* email fetch is best-effort */ }
-      }
+          } catch { /* best-effort */ }
+        })(),
 
-      // Build AI prompt
-      const bigGoals = (context.bigGoals as any[]).slice(0, 5).map((g: any) => g.title).filter(Boolean);
-      const reminderLines = upcomingReminders.map((r: any) => `- ${r.title}${r.reminderAt ? ` (${new Date(r.reminderAt).toLocaleDateString()})` : ""}`).join("\n");
+        // 📅 Google Calendar — next 48h events
+        (async () => {
+          if (!googleOAuth2) return;
+          try {
+            const { google } = await import("googleapis");
+            const cal = google.calendar({ version: "v3", auth: googleOAuth2 });
+            const calId = integration?.googleCalendarId || "primary";
+            const eventsRes = await cal.events.list({
+              calendarId: calId,
+              timeMin: todayDate.toISOString(),
+              timeMax: new Date(todayDate.getTime() + 48 * 3600 * 1000).toISOString(),
+              singleEvents: true,
+              orderBy: "startTime",
+              maxResults: 10,
+            });
+            calendarEvents = (eventsRes.data.items ?? []).map((e: any) => ({
+              title: e.summary ?? "Untitled event",
+              start: e.start?.dateTime ?? e.start?.date ?? "",
+              end: e.end?.dateTime ?? e.end?.date,
+            }));
+          } catch { /* best-effort */ }
+        })(),
 
-      const prompt = `You are Zion, acting as an elite Chief of Staff giving a sharp, warm morning briefing.
+        // 💬 Slack — unread DMs and @mentions via bot token
+        (async () => {
+          if (!integration?.slackBotToken) return;
+          try {
+            const token = integration.slackBotToken;
+            const channelIds: string[] = integration.slackReadChannelIds
+              ? JSON.parse(integration.slackReadChannelIds)
+              : [];
+
+            // Fetch auth to get bot user ID
+            const authRes = await fetch("https://slack.com/api/auth.test", {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            const authData = (await authRes.json()) as any;
+            const botUserId = authData.user_id as string | undefined;
+
+            // Use conversations.list to get DM channels if no explicit channels set
+            if (channelIds.length === 0) {
+              const listRes = await fetch("https://slack.com/api/conversations.list?types=im&limit=10", {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              const listData = (await listRes.json()) as any;
+              ((listData.channels ?? []) as any[]).forEach((c: any) => channelIds.push(c.id));
+            }
+
+            const oldest = String(Math.floor((Date.now() - 24 * 3600 * 1000) / 1000));
+            const msgs: SlackMessage[] = [];
+            await Promise.all(channelIds.slice(0, 5).map(async (channelId) => {
+              try {
+                const histRes = await fetch(
+                  `https://slack.com/api/conversations.history?channel=${channelId}&oldest=${oldest}&limit=20`,
+                  { headers: { Authorization: `Bearer ${token}` } },
+                );
+                const histData = (await histRes.json()) as any;
+                ((histData.messages ?? []) as any[]).forEach((m: any) => {
+                  if (m.bot_id) return; // skip bot messages
+                  const isMention = botUserId && m.text?.includes(`<@${botUserId}>`);
+                  const isDM = true;
+                  if (isMention || isDM) {
+                    msgs.push({ channel: channelId, user: m.user ?? "unknown", text: (m.text ?? "").slice(0, 200) });
+                  }
+                });
+              } catch { /* channel failed */ }
+            }));
+            slackMessages = msgs.slice(0, 8);
+          } catch { /* best-effort */ }
+        })(),
+
+        // 📒 Notion — recently modified pages
+        (async () => {
+          if (!integration?.notionToken) return;
+          try {
+            const dbId = integration.notionDatabaseId;
+            if (!dbId) return;
+            const body: Record<string, unknown> = {
+              sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
+              page_size: 8,
+            };
+            const res = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${integration.notionToken}`,
+                "Notion-Version": "2022-06-28",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(body),
+            });
+            const data = (await res.json()) as any;
+            notionPages = ((data.results ?? []) as any[]).slice(0, 6).map((p: any) => {
+              const titleProp = Object.values(p.properties ?? {}).find((v: any) => v.type === "title") as any;
+              const title = titleProp?.title?.[0]?.plain_text ?? "Untitled";
+              return {
+                title,
+                url: p.url ?? "",
+                lastEdited: p.last_edited_time ?? "",
+              };
+            });
+          } catch { /* best-effort */ }
+        })(),
+
+        // 📦 Box — recently modified files
+        (async () => {
+          if (!integration?.boxAccessToken) return;
+          try {
+            const res = await fetch("https://api.box.com/2.0/search?query=*&sort=modified_at&direction=DESC&limit=8&type=file", {
+              headers: { Authorization: `Bearer ${integration.boxAccessToken}` },
+            });
+            const data = (await res.json()) as any;
+            boxFiles = ((data.entries ?? []) as any[]).map((f: any) => ({
+              name: f.name ?? "Unknown",
+              path: f.path_collection?.entries?.map((e: any) => e.name).join(" / ") ?? "",
+              modified: f.modified_at ?? "",
+            }));
+          } catch { /* best-effort */ }
+        })(),
+      ]);
+
+      // ── Build three-section context for LLM ───────────────────────────────
+      const commsSection = [
+        gmailItems.length
+          ? `Gmail (${gmailItems.length} unread):\n${gmailItems.map(e => `  • From ${e.from}: ${e.subject}`).join("\n")}`
+          : "Gmail: No unread emails",
+        slackMessages.length
+          ? `Slack (${slackMessages.length} messages):\n${slackMessages.map(m => `  • ${m.text}`).join("\n")}`
+          : integration?.slackBotToken ? "Slack: No new messages" : "Slack: Not connected",
+      ].join("\n\n");
+
+      const scheduleSection = [
+        calendarEvents.length
+          ? `Calendar (next 48h):\n${calendarEvents.map(e => {
+              const start = e.start ? new Date(e.start).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" }) : "";
+              return `  • ${start}: ${e.title}`;
+            }).join("\n")}`
+          : schedule.length
+            ? `Planner schedule:\n${schedule.map(s => `  • ${s}`).join("\n")}`
+            : "Calendar: No upcoming events",
+        granolaItems.length
+          ? `Meeting Notes (Granola):\n${granolaItems.map(g => `  • ${g.subject}`).join("\n")}`
+          : "",
+      ].filter(Boolean).join("\n\n");
+
+      const docsSection = [
+        notionPages.length
+          ? `Notion (recent pages):\n${notionPages.map(p => `  • ${p.title}`).join("\n")}`
+          : integration?.notionToken ? "Notion: No recent pages" : "Notion: Not connected",
+        boxFiles.length
+          ? `Box (recent files):\n${boxFiles.map(f => `  • ${f.name}`).join("\n")}`
+          : integration?.boxAccessToken ? "Box: No recent files" : "Box: Not connected",
+      ].join("\n\n");
+
+      const prompt = `You are Zion, acting as an elite Chief of Staff giving a sharp, warm daily briefing.
 
 Today: ${dateLabel}
 Big Goals: ${bigGoals.join(", ") || "None set"}
-Today's schedule slots: ${schedule.length ? schedule.join(", ") : "No scheduled items"}
 Weekly priorities: ${priorities.length ? priorities.join(", ") : "None set"}
-Today's tasks: ${todayTasks.length ? todayTasks.join(", ") : "None set"}
-Upcoming reminders: ${reminderLines || "None"}${emailContext}
+Upcoming reminders: ${reminderLines}
 
-Write a structured briefing with these EXACT sections (use these exact headers):
+## 📪 COMMS (Gmail + Slack)
+${commsSection}
+
+## 📅 SCHEDULE (Calendar + Meeting Notes)
+${scheduleSection}
+
+## 📒 DOCS & PROJECTS (Notion + Box)
+${docsSection}
+
+Write a structured briefing with these EXACT sections:
 
 ## Good Morning
-One warm, motivating sentence personalized to today and what's on the schedule.
+One warm, energising sentence tailored to today's data.
+
+## 📪 Comms
+Top 3 follow-ups or replies needed from the emails/Slack above. If nothing urgent, say so briefly.
+
+## 📅 Schedule
+List today's calendar events or planner slots. Flag any conflicts or prep needed.
+
+## 📒 Docs & Projects
+Highlight any active Notion pages or Box files needing attention. If none connected, skip this section.
 
 ## Today's Focus
-3 bullet points — the most important things to accomplish today based on the data above.
-
-## Your Schedule
-List today's scheduled items. If empty, suggest 2-3 time blocks based on priorities.
-
-## On Your Radar
-Up to 3 upcoming reminders or important things to keep in mind this week.
+3 bullet-pointed priorities for today, combining planner goals + comms + calendar signals.
 
 ## Zion's Insight
-One strategic observation or encouragement based on the overall picture. Be specific, not generic.
+One sharp, specific strategic observation. Reference actual data. No platitudes.
 
-Keep each section tight — max 3-4 bullet points. Tone: warm, direct, executive.`;
+Tone: warm, direct, executive. Max 4 bullets per section.`;
 
       const { invokeLLM } = await import("./_core/llm");
-      const result = await invokeLLM({
-        max_tokens: 900,
-        messages: [{ role: "user", content: prompt }],
-      });
-
+      const result = await invokeLLM({ max_tokens: 1000, messages: [{ role: "user", content: prompt }] });
       const rawContent = result.choices?.[0]?.message?.content;
       const briefing = typeof rawContent === "string" ? rawContent : "Could not generate briefing.";
-      return { briefing, dateLabel, hasEmails: !!emailContext };
+
+      return {
+        briefing,
+        dateLabel,
+        integrations: {
+          hasGmail: !!(integration?.gmailEnabled && integration.googleAccessToken),
+          hasCalendar: !!googleOAuth2,
+          hasSlack: !!integration?.slackBotToken,
+          hasNotion: !!integration?.notionToken,
+          hasBox: !!integration?.boxAccessToken,
+          hasGranola: granolaItems.length > 0,
+          gmailCount: gmailItems.length,
+          calendarCount: calendarEvents.length,
+          slackCount: slackMessages.length,
+          notionCount: notionPages.length,
+          boxCount: boxFiles.length,
+          granolaCount: granolaItems.length,
+        },
+      };
     }),
 
   // NOTE: getMemories and deleteMemory were removed — memory is now stored

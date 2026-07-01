@@ -36,10 +36,14 @@ export default function IntegrationsPage() {
   const [gcalConnecting, setGcalConnecting] = useState(false);
   const [gcalDisconnecting, setGcalDisconnecting] = useState(false);
 
-  // Slack
+  // Slack (outbound webhook + read bot token)
   const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
   const [slackChannelName, setSlackChannelName] = useState("");
+  const [slackBotToken, setSlackBotToken] = useState("");
   const [slackSaving, setSlackSaving] = useState(false);
+  // Box
+  const [boxAccessToken, setBoxAccessToken] = useState("");
+  const [boxSaving, setBoxSaving] = useState(false);
   const testWebhookMutation = trpc.slack.testWebhook.useMutation();
   const sendDailySummaryMutation = trpc.slack.sendDailySummary.useMutation();
   const [slackTesting, setSlackTesting] = useState(false);
@@ -53,15 +57,13 @@ export default function IntegrationsPage() {
   const [notionDbId, setNotionDbId] = useState("");
   const [notionSaving, setNotionSaving] = useState(false);
 
-  // Populate Slack fields from DB
+  // Populate Slack + Box fields from DB
   useEffect(() => {
     if (integrations) {
-      if (integrations.slackWebhookUrl && !slackWebhookUrl) {
-        setSlackWebhookUrl(integrations.slackWebhookUrl);
-      }
-      if (integrations.slackChannelName && !slackChannelName) {
-        setSlackChannelName(integrations.slackChannelName);
-      }
+      if ((integrations as any).slackWebhookUrl && !slackWebhookUrl) setSlackWebhookUrl((integrations as any).slackWebhookUrl);
+      if ((integrations as any).slackChannelName && !slackChannelName) setSlackChannelName((integrations as any).slackChannelName);
+      if ((integrations as any).slackBotToken && !slackBotToken) setSlackBotToken((integrations as any).slackBotToken);
+      if ((integrations as any).boxAccessToken && !boxAccessToken) setBoxAccessToken((integrations as any).boxAccessToken);
     }
   }, [integrations]);
 
@@ -131,6 +133,7 @@ export default function IntegrationsPage() {
       await saveIntegrationsMutation.mutateAsync({
         slackWebhookUrl: slackWebhookUrl || undefined,
         slackChannelName: slackChannelName || undefined,
+        slackBotToken: slackBotToken || undefined,
       });
       await refetchIntegrations();
       toast.success("Slack settings saved!");
@@ -138,6 +141,19 @@ export default function IntegrationsPage() {
       toast.error("Failed to save Slack settings.");
     } finally {
       setSlackSaving(false);
+    }
+  };
+
+  const handleSaveBox = async () => {
+    setBoxSaving(true);
+    try {
+      await saveIntegrationsMutation.mutateAsync({ boxAccessToken: boxAccessToken || undefined });
+      await refetchIntegrations();
+      toast.success("Box connected!");
+    } catch {
+      toast.error("Failed to save Box token.");
+    } finally {
+      setBoxSaving(false);
     }
   };
 
@@ -436,6 +452,18 @@ export default function IntegrationsPage() {
             />
           </div>
 
+          <div>
+            <label className="text-sm font-semibold block mb-1">Bot Token <span className="font-normal text-muted-foreground">(for Chief of Staff — reads DMs & mentions)</span></label>
+            <p className="text-xs text-muted-foreground mb-2">Create a Slack app with <code>channels:history</code> and <code>im:history</code> scopes, install it, then paste the Bot User OAuth Token here.</p>
+            <input
+              type="password"
+              value={slackBotToken}
+              onChange={(e) => setSlackBotToken(e.target.value)}
+              placeholder="xoxb-..."
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary font-mono"
+            />
+          </div>
+
           <div className="flex flex-wrap gap-2">
             <Button onClick={handleSaveSlack} disabled={slackSaving} size="sm">
               {slackSaving ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
@@ -575,6 +603,67 @@ export default function IntegrationsPage() {
               Disconnect Notion
             </Button>
           )}
+        </div>
+      </div>
+
+      {/* ── Box ── */}
+      <div className="planner-card mb-6">
+        <div className="flex items-start gap-4 mb-4">
+          <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center flex-shrink-0 shadow-sm">
+            <svg viewBox="0 0 24 24" className="w-7 h-7" fill="white">
+              <path d="M11.998 2.003L6.002 5.5v7l5.996 3.498L18 12.5v-7L11.998 2.003zm0 1.155l4.996 2.906v5.672l-4.996 2.906L7 11.736V6.064l4.998-2.906zm-6 10.34L.002 16.5l6 3.497v-1.155l-4.996-2.906V10.264L1.002 9.5v2.998zm12 0v2.998l-4.996 2.906V21l5.996-3.497L13 14.5h1l-1-1z" />
+            </svg>
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <h2 className="font-bold text-lg">Box</h2>
+              {(integrations as any)?.boxAccessToken && (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-100 rounded-full px-2 py-0.5">
+                  ✓ Connected
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground mt-1">Pull recent files into your Chief of Staff briefing.</p>
+          </div>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-semibold block mb-1">Box Access Token</label>
+            <p className="text-xs text-muted-foreground mb-2">
+              Generate a developer token at{" "}
+              <a href="https://app.box.com/developers/console" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">
+                app.box.com/developers/console <ExternalLink size={10} />
+              </a>{" "}
+              — create an app, then use the Developer Token (valid 60 min) or a long-lived service account token.
+            </p>
+            <input
+              type="password"
+              value={boxAccessToken}
+              onChange={(e) => setBoxAccessToken(e.target.value)}
+              placeholder="Paste your Box access token..."
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary font-mono"
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={handleSaveBox} disabled={boxSaving} size="sm">
+              {boxSaving ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
+              Save Box Token
+            </Button>
+            {(integrations as any)?.boxAccessToken && (
+              <Button
+                variant="outline" size="sm"
+                className="text-destructive hover:text-destructive"
+                onClick={async () => {
+                  await saveIntegrationsMutation.mutateAsync({ boxAccessToken: undefined });
+                  setBoxAccessToken("");
+                  await refetchIntegrations();
+                  toast.success("Box disconnected.");
+                }}
+              >
+                Disconnect Box
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </div>

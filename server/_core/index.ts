@@ -16,8 +16,12 @@ import { createContext } from "./context";
 // vite.ts is only loaded dynamically in development so esbuild never
 // bundles vite / vite-plugins into the production output
 
-import { getDb, ensureSchema } from "../db";
+import { getDb, ensureSchema, getUserPlannerContext } from "../db";
 import { startScheduler } from "../scheduler";
+import { authService } from "./sdk";
+import { streamAnthropicLLM } from "./llm";
+import { buildZionSystemPrompt } from "../zionPrompt";
+import { extractMemories } from "../routers";
 import {
   requestIdMiddleware,
   cspMiddleware,
@@ -264,6 +268,76 @@ async function startServer() {
 
   // Email/password auth routes
   registerAuthRoutes(app);
+
+  // ── Zion streaming chat (SSE) ─────────────────────────────────────────────────
+  // Tokens stream to the client as they arrive from Anthropic, giving instant
+  // feedback instead of a 3-8 second blank wait. Auth uses the same cookie as
+  // tRPC; memory never touches the server DB (client sends context, receives updates).
+  app.post("/api/zion/stream", async (req, res) => {
+    let user: Awaited<ReturnType<typeof authService.authenticateRequest>>;
+    try {
+      user = await authService.authenticateRequest(req);
+    } catch {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const { message, history = [], memoryContext = "" } = req.body ?? {};
+    if (typeof message !== "string" || !message.trim()) {
+      res.status(400).json({ error: "message is required" });
+      return;
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const send = (payload: Record<string, unknown>) => {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    try {
+      const context = await getUserPlannerContext(user.id);
+      const systemPrompt = buildZionSystemPrompt(context, memoryContext ?? "");
+
+      const msgs: Array<{ role: "user" | "assistant"; content: string }> = [
+        ...(Array.isArray(history) ? history : []).map((m: any) => ({
+          role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
+          content: String(m.content ?? ""),
+        })),
+        { role: "user", content: message.trim() },
+      ];
+
+      let accumulated = "";
+
+      for await (const chunk of streamAnthropicLLM({ system: systemPrompt, messages: msgs })) {
+        accumulated += chunk;
+        send({ token: chunk });
+      }
+
+      // Parse PLANNER_ACTIONS from full accumulated content
+      let plannerActions: Array<Record<string, unknown>> = [];
+      let displayContent = accumulated;
+      const actionsMatch = accumulated.match(/<PLANNER_ACTIONS>([\s\S]*?)<\/PLANNER_ACTIONS>/);
+      if (actionsMatch) {
+        try {
+          const parsed = JSON.parse(actionsMatch[1].trim());
+          plannerActions = parsed.actions ?? [];
+        } catch { /* ignore malformed JSON */ }
+        displayContent = accumulated.replace(/<PLANNER_ACTIONS>[\s\S]*?<\/PLANNER_ACTIONS>/, "").trim();
+      }
+
+      const memoryUpdates = await extractMemories(message, displayContent);
+      send({ done: true, displayContent, plannerActions, memoryUpdates });
+    } catch (err: any) {
+      console.error("[Zion stream]", err?.message ?? err);
+      send({ error: "Zion is unavailable right now. Please try again." });
+    } finally {
+      res.end();
+    }
+  });
+
   // File upload routes (images + PDFs)
   app.use("/api/upload", uploadRouter);
   // tRPC API

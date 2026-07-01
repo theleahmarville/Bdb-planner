@@ -201,6 +201,73 @@ function applyJsonInstructions(
 }
 
 /**
+ * Stream the Anthropic Messages API, yielding text deltas as they arrive.
+ * The caller is responsible for accumulating chunks and handling the stream end.
+ */
+export async function* streamAnthropicLLM(params: {
+  system?: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  maxTokens?: number;
+}): AsyncGenerator<string> {
+  assertApiKey();
+  const { system, messages, maxTokens = 4096 } = params;
+
+  const body: Record<string, unknown> = {
+    model: ANTHROPIC_MODEL,
+    max_tokens: maxTokens,
+    messages,
+    stream: true,
+  };
+  if (system) body.system = system;
+
+  const response = await fetch(ANTHROPIC_API_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": ENV.openaiApiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Anthropic API error: ${response.status} – ${errorText}`);
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const data = line.slice(6).trim();
+      if (data === "[DONE]") return;
+      try {
+        const event = JSON.parse(data) as Record<string, unknown>;
+        if (
+          event.type === "content_block_delta" &&
+          (event.delta as any)?.type === "text_delta" &&
+          typeof (event.delta as any)?.text === "string"
+        ) {
+          yield (event.delta as any).text as string;
+        }
+      } catch {
+        // ignore malformed SSE frames
+      }
+    }
+  }
+}
+
+/**
  * Call the Anthropic Messages API and return an InvokeResult that matches
  * the shape every caller already expects (OpenAI-compatible structure).
  */

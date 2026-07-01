@@ -452,7 +452,6 @@ export default function ZionPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  const chatMutation = trpc.zion.chat.useMutation();
   const transcribeMutation = trpc.zion.transcribeVoice.useMutation();
   const [showMemory, setShowMemory] = useState(false);
   const [memories, setMemories] = useState<LocalZionMemory[]>([]);
@@ -526,8 +525,17 @@ export default function ZionPage() {
 
     setMessages(prev => [...prev, userMsg]);
 
+    const assistantMsgId = `assistant-${Date.now()}`;
+    // Optimistically add an empty assistant message that will fill as tokens arrive
+    const streamingMsg: Message = {
+      id: assistantMsgId,
+      role: "assistant",
+      content: "",
+      createdAt: new Date(),
+    };
+    setMessages(prev => [...prev, streamingMsg]);
+
     try {
-      // Build context to send to the server — ephemeral, never stored server-side
       const recentHistory = messages
         .filter(m => m.id !== "welcome")
         .slice(-16)
@@ -536,42 +544,82 @@ export default function ZionPage() {
       const localMems = await getLocalMemories(userId).catch(() => [] as LocalZionMemory[]);
       const memoryContext = formatMemoryContext(localMems);
 
-      const result = await chatMutation.mutateAsync({
-        message: text.trim(),
-        isVoice,
-        history: recentHistory,
-        memoryContext,
+      const response = await fetch("/api/zion/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ message: text.trim(), isVoice, history: recentHistory, memoryContext }),
       });
 
-      const assistantMsg: Message = {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        content: result.content,
-        plannerActions: result.plannerActions,
-        createdAt: new Date(),
-      };
-
-      // Persist assistant reply locally
-      const localAssistantMsg: LocalZionMessage = {
-        id: assistantMsg.id,
-        role: "assistant",
-        content: assistantMsg.content,
-        plannerActions: assistantMsg.plannerActions,
-        createdAt: assistantMsg.createdAt.toISOString(),
-      };
-      await addLocalMessage(userId, localAssistantMsg).catch(() => {});
-
-      // Persist any extracted memory updates locally (server never stores these)
-      if (result.memoryUpdates?.length) {
-        for (const item of result.memoryUpdates) {
-          await upsertLocalMemory(userId, { category: item.category, keyName: item.key, value: item.value }).catch(() => {});
-        }
+      if (!response.ok || !response.body) {
+        throw new Error(`Stream failed: ${response.status}`);
       }
 
-      setMessages(prev => [...prev, assistantMsg]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let accumulated = "";
+      let finalPlannerActions: PlannerAction[] | undefined;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split("\n\n");
+        buf = parts.pop() ?? "";
+
+        for (const part of parts) {
+          if (!part.startsWith("data: ")) continue;
+          try {
+            const evt = JSON.parse(part.slice(6)) as Record<string, unknown>;
+
+            if (typeof evt.token === "string") {
+              accumulated += evt.token;
+              // Trim the PLANNER_ACTIONS block from display in real time
+              const displayIdx = accumulated.indexOf("<PLANNER_ACTIONS>");
+              const displayContent = displayIdx >= 0 ? accumulated.slice(0, displayIdx).trim() : accumulated;
+              setMessages(prev => prev.map(m =>
+                m.id === assistantMsgId ? { ...m, content: displayContent } : m
+              ));
+            } else if (evt.done) {
+              const display = typeof evt.displayContent === "string" ? evt.displayContent : accumulated;
+              const actions = Array.isArray(evt.plannerActions) ? (evt.plannerActions as PlannerAction[]) : [];
+              finalPlannerActions = actions.length > 0 ? actions : undefined;
+
+              // Final update with clean content + planner actions
+              setMessages(prev => prev.map(m =>
+                m.id === assistantMsgId ? { ...m, content: display, plannerActions: finalPlannerActions } : m
+              ));
+
+              // Persist to IndexedDB
+              await addLocalMessage(userId, {
+                id: assistantMsgId,
+                role: "assistant",
+                content: display,
+                plannerActions: finalPlannerActions,
+                createdAt: new Date().toISOString(),
+              }).catch(() => {});
+
+              // Persist memory updates
+              const memUpdates = Array.isArray(evt.memoryUpdates) ? evt.memoryUpdates as Array<{ category: LocalZionMemory["category"]; key: string; value: string }> : [];
+              for (const item of memUpdates) {
+                await upsertLocalMemory(userId, { category: item.category, keyName: item.key, value: item.value }).catch(() => {});
+              }
+            } else if (evt.error) {
+              throw new Error(String(evt.error));
+            }
+          } catch (parseErr) {
+            if ((parseErr as Error).message?.includes("Stream failed") || (parseErr as Error).message?.includes("unavailable")) {
+              throw parseErr;
+            }
+            // ignore malformed SSE frames
+          }
+        }
+      }
     } catch {
       toast.error("Zion couldn't respond right now. Please try again.");
-      setMessages(prev => prev.filter(m => m.id !== userMsg.id));
+      setMessages(prev => prev.filter(m => m.id !== userMsg.id && m.id !== assistantMsgId));
     } finally {
       setIsSending(false);
       setTimeout(() => textareaRef.current?.focus(), 100);
@@ -797,7 +845,8 @@ export default function ZionPage() {
           messages.map(msg => <MessageBubble key={msg.id} msg={msg} />)
         )}
 
-        {isSending && (
+        {/* Streaming: show dots only while waiting for the very first token */}
+        {isSending && messages[messages.length - 1]?.role !== "assistant" && (
           <div className="flex gap-3 mb-4">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shrink-0 mt-1 shadow-sm">
               <Sparkles className="w-4 h-4 text-white" />

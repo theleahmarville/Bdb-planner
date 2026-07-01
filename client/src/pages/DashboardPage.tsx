@@ -9,6 +9,7 @@ import {
   Sparkles, Droplets, Share2, Moon, Send, Loader2,
   Instagram, Facebook, Twitter, Youtube,
   Mail, Briefcase, RefreshCw, X, AlertCircle, ChevronDown, ChevronUp,
+  MessageSquare, FileText, Box,
 } from "lucide-react";
 import { Streamdown } from "streamdown";
 import { cn } from "@/lib/utils";
@@ -121,26 +122,51 @@ function EmailSummaryPanel({ onClose }: { onClose: () => void }) {
 }
 
 // ── Chief of Staff Panel (powered by Zion) ────────────────────────────────────
+type CoSBriefing = {
+  briefing: string;
+  dateLabel: string;
+  integrations: {
+    hasGmail: boolean; hasCalendar: boolean; hasSlack: boolean;
+    hasNotion: boolean; hasBox: boolean; hasGranola: boolean;
+    gmailCount: number; calendarCount: number; slackCount: number;
+    notionCount: number; boxCount: number; granolaCount: number;
+  };
+};
+
+function IntegrationPill({ icon, label, count, active }: { icon: React.ReactNode; label: string; count: number; active: boolean }) {
+  return (
+    <div className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border ${
+      active && count > 0 ? "bg-emerald-50 border-emerald-200 text-emerald-700" :
+      active ? "bg-muted border-border text-muted-foreground" :
+      "bg-gray-50 border-gray-200 text-gray-400"
+    }`}>
+      {icon}
+      {label}{active && count > 0 ? ` (${count})` : ""}
+    </div>
+  );
+}
+
 function ChiefOfStaffPanel({ onClose }: { onClose: () => void }) {
-  const [briefing, setBriefing] = useState<{ briefing: string; dateLabel: string; hasEmails: boolean } | null>(null);
+  const [briefing, setBriefing] = useState<CoSBriefing | null>(null);
   const [loading, setLoading] = useState(false);
-  const [includeEmails, setIncludeEmails] = useState(false);
-  const { data: gmailStatus } = trpc.gmail.status.useQuery(undefined) as any;
   const chiefOfStaffMutation = trpc.zion.chiefOfStaff.useMutation();
 
-  const generate = async (withEmails = includeEmails) => {
+  const generate = async () => {
     setLoading(true);
     try {
-      const data = await chiefOfStaffMutation.mutateAsync({ date: new Date().toISOString().slice(0, 10), includeEmails: withEmails });
-      setBriefing(data);
+      const data = await chiefOfStaffMutation.mutateAsync({ date: new Date().toISOString().slice(0, 10) });
+      setBriefing(data as CoSBriefing);
     } catch (e: any) { toast.error(e?.message ?? "Could not generate briefing."); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { generate(false); }, []);
+  useEffect(() => { generate(); }, []);
+
+  const integ = briefing?.integrations;
 
   return (
     <div className="planner-card overflow-hidden p-0">
+      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-gradient-to-r from-violet-50 to-indigo-50">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-full bg-violet-100 flex items-center justify-center">
@@ -152,16 +178,7 @@ function ChiefOfStaffPanel({ onClose }: { onClose: () => void }) {
           </div>
         </div>
         <div className="flex items-center gap-1">
-          {gmailStatus?.gmailEnabled && (
-            <button
-              onClick={() => { const next = !includeEmails; setIncludeEmails(next); generate(next); }}
-              disabled={loading}
-              className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-full border transition-all ${includeEmails ? "bg-red-50 border-red-200 text-red-600" : "bg-muted border-border text-muted-foreground hover:bg-red-50 hover:border-red-200 hover:text-red-600"}`}
-            >
-              <Mail className="w-3 h-3" />{includeEmails ? "Emails on" : "+ Emails"}
-            </button>
-          )}
-          <button onClick={() => generate(includeEmails)} disabled={loading}
+          <button onClick={generate} disabled={loading}
             className="w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:bg-violet-100 hover:text-violet-600 transition-colors" title="Regenerate">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
@@ -171,13 +188,28 @@ function ChiefOfStaffPanel({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
+
+      {/* Integration status pills */}
+      {integ && (
+        <div className="px-4 py-2 border-b border-border bg-white/60 flex flex-wrap gap-1.5">
+          <IntegrationPill icon={<Mail className="w-2.5 h-2.5" />} label="Gmail" count={integ.gmailCount} active={integ.hasGmail} />
+          <IntegrationPill icon={<MessageSquare className="w-2.5 h-2.5" />} label="Slack" count={integ.slackCount} active={integ.hasSlack} />
+          <IntegrationPill icon={<CalendarDays className="w-2.5 h-2.5" />} label="Calendar" count={integ.calendarCount} active={integ.hasCalendar} />
+          <IntegrationPill icon={<Sparkles className="w-2.5 h-2.5" />} label="Granola" count={integ.granolaCount} active={integ.hasGranola} />
+          <IntegrationPill icon={<BookOpen className="w-2.5 h-2.5" />} label="Notion" count={integ.notionCount} active={integ.hasNotion} />
+          <IntegrationPill icon={<Box className="w-2.5 h-2.5" />} label="Box" count={integ.boxCount} active={integ.hasBox} />
+        </div>
+      )}
+
+      {/* Briefing content */}
       <div className="max-h-[420px] overflow-y-auto">
         {loading && (
           <div className="flex flex-col items-center justify-center gap-3 py-10 text-muted-foreground">
             <div className="w-10 h-10 rounded-full bg-violet-100 flex items-center justify-center">
               <Loader2 className="w-5 h-5 text-violet-600 animate-spin" />
             </div>
-            <p className="text-sm">Preparing your briefing…</p>
+            <p className="text-sm">Pulling your briefing together…</p>
+            <p className="text-[10px] text-muted-foreground/60">Checking email, calendar, Slack, Notion…</p>
           </div>
         )}
         {!loading && briefing && (
@@ -185,6 +217,14 @@ function ChiefOfStaffPanel({ onClose }: { onClose: () => void }) {
             <div className="prose prose-sm max-w-none prose-h2:text-sm prose-h2:font-bold prose-h2:mt-3 prose-h2:mb-1 prose-h2:first:mt-0 prose-ul:my-1 prose-li:my-0.5 prose-li:text-xs prose-p:text-xs prose-p:my-1">
               <Streamdown>{briefing.briefing}</Streamdown>
             </div>
+            {!integ?.hasGmail && !integ?.hasSlack && !integ?.hasNotion && !integ?.hasBox && (
+              <div className="mt-3 p-2.5 rounded-lg bg-violet-50 border border-violet-200">
+                <p className="text-[10px] text-violet-700 font-medium">Connect more integrations for a richer briefing</p>
+                <p className="text-[10px] text-violet-500 mt-0.5">
+                  Gmail, Slack, Notion, and Box can all feed into your Chief of Staff. <a href="/integrations" className="underline">Set up in Integrations →</a>
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
