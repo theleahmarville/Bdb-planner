@@ -19,6 +19,7 @@ import OnboardingPage from "./pages/OnboardingPage";
 import CommunityPage from "./pages/CommunityPage";
 import DashboardPage from "./pages/DashboardPage";
 import SubscriptionPage from "./pages/SubscriptionPage";
+import AdminPage from "./pages/AdminPage";
 import InvitePage from "./pages/InvitePage";
 import { TermsPage, PrivacyPage } from "./pages/LegalPage";
 import PlannerLayout from "./components/PlannerLayout";
@@ -38,9 +39,11 @@ function PlannerRouter() {
   const isInvite = location.startsWith("/invite/");
   const isTerms = location === "/legal/terms";
   const isPrivacy = location === "/legal/privacy";
+  const isAdmin = location === "/admin";
 
   if (isTerms) return <TermsPage />;
   if (isPrivacy) return <PrivacyPage />;
+  if (isAdmin) return <AdminPage />;
   if (isLogin) return <LoginPage />;
   if (isResetPassword) return <ResetPasswordPage />;
   if (isOnboarding) return <OnboardingPage />;

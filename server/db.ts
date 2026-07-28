@@ -270,6 +270,15 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // Admin config table — stores runtime plan/feature configuration
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`admin_config\` (
+        \`configKey\` VARCHAR(128) PRIMARY KEY,
+        \`value\` JSON NOT NULL,
+        \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
     for (const { table, column, ddl } of checks) {
       const [rows] = await conn.query(
         `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS

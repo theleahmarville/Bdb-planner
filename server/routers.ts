@@ -2694,6 +2694,366 @@ const subscriptionRouter = router({
     }),
 });
 
+// ─── Admin Panel Router ───────────────────────────────────────────────────────
+const DEFAULT_PLAN_CONFIG = {
+  free:  { displayName: "Free",  monthlyPrice: 0,     zionMessageLimit: 10, features: ["Daily Bible Verse & Affirmation", "Annual, Monthly, Weekly & Daily Planner", "10 Zion AI messages/month", "Community access", "Progress tracking"] },
+  pro:   { displayName: "Pro",   monthlyPrice: 9.99,  zionMessageLimit: -1, features: ["Everything in Free", "Unlimited Zion AI messages", "Gmail & Calendar integrations", "Morning email briefing", "Streak reminders", "Priority support"] },
+  elite: { displayName: "Elite", monthlyPrice: 19.99, zionMessageLimit: -1, features: ["Everything in Pro", "Slack, Notion & Box integrations", "Chief of Staff AI briefing", "Advanced analytics", "1:1 onboarding call", "Early feature access"] },
+};
+
+async function getAdminConfig(key: string): Promise<Record<string, unknown> | null> {
+  const { getPool } = await import("./db");
+  const pool = getPool();
+  if (!pool) return null;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query("SELECT value FROM admin_config WHERE configKey = ?", [key]);
+    const row = (rows as any[])[0];
+    return row ? (typeof row.value === "string" ? JSON.parse(row.value) : row.value) : null;
+  } finally { conn.release(); }
+}
+
+async function setAdminConfig(key: string, value: Record<string, unknown>): Promise<void> {
+  const { getPool } = await import("./db");
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      "INSERT INTO admin_config (configKey, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)",
+      [key, JSON.stringify(value)]
+    );
+  } finally { conn.release(); }
+}
+
+const adminPanelRouter = router({
+  // ── Users ──────────────────────────────────────────────────────────────────
+  listUsers: adminProcedure
+    .input(z.object({
+      search: z.string().optional(),
+      plan: z.enum(["all", "free", "pro", "elite"]).default("all"),
+      role: z.enum(["all", "user", "admin"]).default("all"),
+      status: z.enum(["all", "active", "suspended"]).default("all"),
+      limit: z.number().int().min(1).max(100).default(50),
+      offset: z.number().int().min(0).default(0),
+      sortBy: z.enum(["createdAt", "lastSignedIn", "name"]).default("createdAt"),
+      sortDir: z.enum(["asc", "desc"]).default("desc"),
+    }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return { users: [], total: 0 };
+      const conn = await pool.getConnection();
+      try {
+        const conditions: string[] = ["u.anonymizedAt IS NULL"];
+        const params: unknown[] = [];
+        if (input.search) {
+          conditions.push("(u.name LIKE ? OR u.email LIKE ?)");
+          params.push(`%${input.search}%`, `%${input.search}%`);
+        }
+        if (input.plan !== "all") {
+          conditions.push("u.subscriptionPlan = ?");
+          params.push(input.plan);
+        }
+        if (input.role !== "all") {
+          conditions.push("u.role = ?");
+          params.push(input.role);
+        }
+        if (input.status === "active") {
+          conditions.push("(u.subscriptionStatus != 'suspended' OR u.subscriptionStatus IS NULL)");
+        } else if (input.status === "suspended") {
+          conditions.push("u.subscriptionStatus = 'suspended'");
+        }
+        const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+        const sortCol = input.sortBy === "name" ? "u.name" : input.sortBy === "lastSignedIn" ? "u.lastSignedIn" : "u.createdAt";
+        const [countRows] = await conn.query(`SELECT COUNT(*) as total FROM users u ${where}`, params);
+        const total = (countRows as any[])[0]?.total ?? 0;
+        const [rows] = await conn.query(
+          `SELECT u.id, u.name, u.email, u.role, u.subscriptionPlan, u.subscriptionStatus, u.createdAt, u.lastSignedIn, u.emailNotificationsEnabled,
+                  (SELECT COUNT(*) FROM daily_entries de WHERE de.userId = u.id) as entryCount,
+                  (SELECT COUNT(*) FROM daily_check_ins ci WHERE ci.userId = u.id) as checkInCount
+           FROM users u ${where}
+           ORDER BY ${sortCol} ${input.sortDir === "asc" ? "ASC" : "DESC"}
+           LIMIT ? OFFSET ?`,
+          [...params, input.limit, input.offset]
+        );
+        return { users: rows as any[], total };
+      } finally { conn.release(); }
+    }),
+
+  getUser: adminProcedure
+    .input(z.object({ userId: z.number().int() }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return null;
+      const conn = await pool.getConnection();
+      try {
+        const [rows] = await conn.query(
+          `SELECT u.id, u.name, u.email, u.role, u.subscriptionPlan, u.subscriptionStatus, u.subscriptionPeriodEnd,
+                  u.stripeCustomerId, u.stripeSubscriptionId, u.createdAt, u.lastSignedIn, u.loginMethod, u.timezone,
+                  u.emailNotificationsEnabled, u.devotionPopupEnabled, u.onboardingCompleted,
+                  (SELECT COUNT(*) FROM daily_entries de WHERE de.userId = u.id) as entryCount,
+                  (SELECT COUNT(*) FROM daily_check_ins ci WHERE ci.userId = u.id) as checkInCount,
+                  (SELECT COUNT(*) FROM zion_messages zm WHERE zm.userId = u.id AND zm.role = 'user') as zionCount,
+                  (SELECT COUNT(*) FROM daily_devotions dd WHERE dd.userId = u.id) as devotionCount,
+                  (SELECT COUNT(*) FROM notes n WHERE n.userId = u.id) as noteCount
+           FROM users u WHERE u.id = ?`,
+          [input.userId]
+        );
+        return (rows as any[])[0] ?? null;
+      } finally { conn.release(); }
+    }),
+
+  setPlan: adminProcedure
+    .input(z.object({ userId: z.number().int(), plan: z.enum(["free", "pro", "elite"]) }))
+    .mutation(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return;
+      const conn = await pool.getConnection();
+      try {
+        await conn.query("UPDATE users SET subscriptionPlan = ?, updatedAt = NOW() WHERE id = ?", [input.plan, input.userId]);
+      } finally { conn.release(); }
+    }),
+
+  setRole: adminProcedure
+    .input(z.object({ userId: z.number().int(), role: z.enum(["user", "admin"]) }))
+    .mutation(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return;
+      const conn = await pool.getConnection();
+      try {
+        await conn.query("UPDATE users SET role = ?, updatedAt = NOW() WHERE id = ?", [input.role, input.userId]);
+      } finally { conn.release(); }
+    }),
+
+  setSuspended: adminProcedure
+    .input(z.object({ userId: z.number().int(), suspended: z.boolean() }))
+    .mutation(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return;
+      const conn = await pool.getConnection();
+      try {
+        const status = input.suspended ? "suspended" : "active";
+        await conn.query("UPDATE users SET subscriptionStatus = ?, updatedAt = NOW() WHERE id = ?", [status, input.userId]);
+      } finally { conn.release(); }
+    }),
+
+  // ── Analytics ──────────────────────────────────────────────────────────────
+  overview: adminProcedure.query(async () => {
+    const { getPool } = await import("./db");
+    const pool = getPool();
+    if (!pool) return null;
+    const conn = await pool.getConnection();
+    try {
+      const [[stats]] = await conn.query(`
+        SELECT
+          COUNT(*) as totalUsers,
+          SUM(CASE WHEN lastSignedIn >= DATE_SUB(NOW(), INTERVAL 1 DAY)  THEN 1 ELSE 0 END) as activeToday,
+          SUM(CASE WHEN lastSignedIn >= DATE_SUB(NOW(), INTERVAL 7 DAY)  THEN 1 ELSE 0 END) as activeWeek,
+          SUM(CASE WHEN lastSignedIn >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) as activeMonth,
+          SUM(CASE WHEN createdAt >= DATE_SUB(NOW(), INTERVAL 7 DAY)     THEN 1 ELSE 0 END) as newThisWeek,
+          SUM(CASE WHEN createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)    THEN 1 ELSE 0 END) as newThisMonth,
+          SUM(CASE WHEN subscriptionPlan = 'free'  OR subscriptionPlan IS NULL THEN 1 ELSE 0 END) as freeCount,
+          SUM(CASE WHEN subscriptionPlan = 'pro'                                THEN 1 ELSE 0 END) as proCount,
+          SUM(CASE WHEN subscriptionPlan = 'elite'                              THEN 1 ELSE 0 END) as eliteCount,
+          SUM(CASE WHEN subscriptionStatus = 'suspended'                        THEN 1 ELSE 0 END) as suspendedCount,
+          SUM(CASE WHEN role = 'admin'                                           THEN 1 ELSE 0 END) as adminCount
+        FROM users WHERE anonymizedAt IS NULL
+      `) as any;
+      const [[activity]] = await conn.query(`
+        SELECT
+          (SELECT COUNT(*) FROM daily_entries  WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as entries30d,
+          (SELECT COUNT(*) FROM daily_check_ins WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as checkIns30d,
+          (SELECT COUNT(*) FROM zion_messages  WHERE role='user' AND createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as zionMsgs30d,
+          (SELECT COUNT(*) FROM daily_devotions WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as devotions30d,
+          (SELECT COUNT(*) FROM notes          WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as notes30d
+      `) as any;
+      const mrr = (Number(stats.proCount) * 9.99) + (Number(stats.eliteCount) * 19.99);
+      return { ...stats, ...activity, mrr: parseFloat(mrr.toFixed(2)), arr: parseFloat((mrr * 12).toFixed(2)) };
+    } finally { conn.release(); }
+  }),
+
+  userGrowth: adminProcedure
+    .input(z.object({ days: z.number().int().min(7).max(365).default(30) }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return [];
+      const conn = await pool.getConnection();
+      try {
+        const [rows] = await conn.query(
+          `SELECT DATE(createdAt) as date, COUNT(*) as count
+           FROM users WHERE createdAt >= DATE_SUB(NOW(), INTERVAL ? DAY) AND anonymizedAt IS NULL
+           GROUP BY DATE(createdAt) ORDER BY date ASC`,
+          [input.days]
+        );
+        const map = new Map((rows as any[]).map((r: any) => [r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date), Number(r.count)]));
+        const result: { date: string; count: number }[] = [];
+        for (let i = input.days - 1; i >= 0; i--) {
+          const d = new Date(); d.setDate(d.getDate() - i);
+          const key = d.toISOString().slice(0, 10);
+          result.push({ date: key, count: map.get(key) ?? 0 });
+        }
+        return result;
+      } finally { conn.release(); }
+    }),
+
+  topUsers: adminProcedure.query(async () => {
+    const { getPool } = await import("./db");
+    const pool = getPool();
+    if (!pool) return [];
+    const conn = await pool.getConnection();
+    try {
+      const [rows] = await conn.query(`
+        SELECT u.id, u.name, u.email, u.subscriptionPlan,
+               COUNT(DISTINCT ci.date) as checkInDays,
+               COUNT(DISTINCT de.date) as entryDays,
+               MAX(ci.createdAt) as lastCheckIn
+        FROM users u
+        LEFT JOIN daily_check_ins ci ON ci.userId = u.id AND ci.createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        LEFT JOIN daily_entries   de ON de.userId = u.id AND de.createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        WHERE u.anonymizedAt IS NULL
+        GROUP BY u.id ORDER BY (COUNT(DISTINCT ci.date) + COUNT(DISTINCT de.date)) DESC
+        LIMIT 20
+      `);
+      return rows as any[];
+    } finally { conn.release(); }
+  }),
+
+  // ── Plan Config ────────────────────────────────────────────────────────────
+  getPlanConfig: adminProcedure.query(async () => {
+    const saved = await getAdminConfig("plan_config");
+    if (saved) {
+      return { ...DEFAULT_PLAN_CONFIG, ...(saved as any) };
+    }
+    return DEFAULT_PLAN_CONFIG;
+  }),
+
+  updatePlanConfig: adminProcedure
+    .input(z.object({
+      planId: z.enum(["free", "pro", "elite"]),
+      displayName: z.string().min(1).max(64).optional(),
+      monthlyPrice: z.number().min(0).max(999).optional(),
+      zionMessageLimit: z.number().int().min(-1).max(100000).optional(),
+      features: z.array(z.string().max(200)).max(20).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      const current = await getAdminConfig("plan_config") ?? { ...DEFAULT_PLAN_CONFIG };
+      const plan = (current as any)[input.planId] ?? (DEFAULT_PLAN_CONFIG as any)[input.planId];
+      const updated = { ...plan };
+      if (input.displayName !== undefined) updated.displayName = input.displayName;
+      if (input.monthlyPrice !== undefined) updated.monthlyPrice = input.monthlyPrice;
+      if (input.zionMessageLimit !== undefined) updated.zionMessageLimit = input.zionMessageLimit;
+      if (input.features !== undefined) updated.features = input.features;
+      (current as any)[input.planId] = updated;
+      await setAdminConfig("plan_config", current as Record<string, unknown>);
+      return updated;
+    }),
+
+  // ── Broadcast ──────────────────────────────────────────────────────────────
+  broadcastEmail: adminProcedure
+    .input(z.object({
+      subject: z.string().min(1).max(256),
+      body: z.string().min(1).max(20000),
+      audience: z.enum(["all", "free", "pro", "elite"]).default("all"),
+    }))
+    .mutation(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) throw new Error("DB not available");
+      const conn = await pool.getConnection();
+      let recipients: Array<{ email: string; name: string | null }> = [];
+      try {
+        const planFilter = input.audience === "all" ? "" : "AND (subscriptionPlan = ?)";
+        const params: unknown[] = input.audience === "all" ? [] : [input.audience];
+        const [rows] = await conn.query(
+          `SELECT email, name FROM users WHERE anonymizedAt IS NULL AND emailNotificationsEnabled = 1 AND email IS NOT NULL ${planFilter} LIMIT 1000`,
+          params
+        );
+        recipients = rows as any[];
+      } finally { conn.release(); }
+
+      if (!process.env.RESEND_API_KEY) throw new Error("Email service not configured.");
+      const { Resend } = await import("resend");
+      const resend = new Resend(process.env.RESEND_API_KEY);
+      let sent = 0;
+      for (const r of recipients) {
+        try {
+          const html = `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:32px 24px">
+            <div style="background:#1a0d2e;color:#fff;padding:20px 24px;border-radius:12px 12px 0 0">
+              <span style="font-size:11px;letter-spacing:4px;opacity:.6">BE · DO · BECOME</span>
+            </div>
+            <div style="background:#fff;padding:24px;border:1px solid #e5e7eb;border-radius:0 0 12px 12px">
+              <p style="font-size:15px;color:#111;white-space:pre-wrap">${input.body.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>
+            </div>
+          </div>`;
+          await resend.emails.send({ from: "BDB Planner <hello@bedoBecome.app>", to: r.email!, subject: input.subject, html });
+          sent++;
+        } catch { /* skip failed */ }
+      }
+      return { sent, total: recipients.length };
+    }),
+
+  // ── System ─────────────────────────────────────────────────────────────────
+  schedulerJobs: adminProcedure.query(async () => {
+    const { getPool } = await import("./db");
+    const pool = getPool();
+    if (!pool) return [];
+    const conn = await pool.getConnection();
+    try {
+      const [rows] = await conn.query(`
+        SELECT jobType, MAX(sentAt) as lastRun, COUNT(*) as totalRuns,
+               COUNT(DISTINCT userId) as uniqueUsers,
+               MAX(DATE(sentAt)) as lastDate
+        FROM scheduler_log
+        WHERE sentAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        GROUP BY jobType ORDER BY lastRun DESC
+      `);
+      return rows as any[];
+    } finally { conn.release(); }
+  }),
+
+  recentAuditLog: adminProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(200).default(50), category: z.enum(["auth","data","admin","security","all"]).default("all") }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return [];
+      const conn = await pool.getConnection();
+      try {
+        const where = input.category !== "all" ? "WHERE category = ?" : "";
+        const params: unknown[] = input.category !== "all" ? [input.category, input.limit] : [input.limit];
+        const [rows] = await conn.query(
+          `SELECT id, userId, event, category, outcome, ip, detail, createdAt FROM audit_log ${where} ORDER BY createdAt DESC LIMIT ?`,
+          params
+        );
+        return rows as any[];
+      } finally { conn.release(); }
+    }),
+
+  dbStats: adminProcedure.query(async () => {
+    const { getPool } = await import("./db");
+    const pool = getPool();
+    if (!pool) return [];
+    const conn = await pool.getConnection();
+    try {
+      const tables = ["users","daily_entries","daily_check_ins","zion_messages","daily_devotions","notes","reminders","community_messages","audit_log","scheduler_log","zion_memory"];
+      const results: { table: string; rows: number }[] = [];
+      for (const t of tables) {
+        try {
+          const [[r]] = await conn.query(`SELECT COUNT(*) as cnt FROM \`${t}\``) as any;
+          results.push({ table: t, rows: Number(r?.cnt ?? 0) });
+        } catch { results.push({ table: t, rows: -1 }); }
+      }
+      return results;
+    } finally { conn.release(); }
+  }),
+});
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -2732,5 +3092,6 @@ export const appRouter = router({
   push: pushRouter,
   invite: inviteRouter,
   subscription: subscriptionRouter,
+  adminPanel: adminPanelRouter,
 });
 export type AppRouter = typeof appRouter;

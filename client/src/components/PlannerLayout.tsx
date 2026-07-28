@@ -26,6 +26,7 @@ import {
   Trophy,
   Home,
   Crown,
+  Shield,
 } from "lucide-react";
 import { MONTHS } from "@/lib/planner";
 import { cn } from "@/lib/utils";
@@ -423,6 +424,16 @@ export default function PlannerLayout({
             {sidebarOpen && <span className="text-amber-600 font-medium">Plans</span>}
           </div>
         </Link>
+
+        {/* Admin Panel — visible only to admins */}
+        {(user as any)?.role === "admin" && (
+          <Link href="/admin">
+            <div className="sidebar-nav-item" title={!sidebarOpen ? "Admin Panel" : undefined}>
+              <Shield size={18} className="flex-shrink-0 text-rose-500" />
+              {sidebarOpen && <span className="text-rose-600 font-medium">Admin</span>}
+            </div>
+          </Link>
+        )}
 
         <div className="border-t border-sidebar-border my-2" />
 
