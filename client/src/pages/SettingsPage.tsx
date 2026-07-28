@@ -726,21 +726,78 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* ── Danger zone ───────────────────────────────────────────────────────── */}
-      <div className="planner-card border-red-100">
+      {/* ── Sign Out ─────────────────────────────────────────────────────────── */}
+      <SignOutCard logout={logout} />
+    </div>
+  );
+}
+
+function SignOutCard({ logout }: { logout: () => Promise<void> }) {
+  const [confirming, setConfirming] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    try {
+      await logout();
+    } catch {
+      setSigningOut(false);
+      setConfirming(false);
+    }
+  };
+
+  if (!confirming) {
+    return (
+      <div className="planner-card border border-red-100">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center shrink-0">
             <LogOut size={16} className="text-red-600" />
           </div>
-          <h2 className="font-bold text-base">Sign Out</h2>
+          <div>
+            <h2 className="font-bold text-base">Sign Out</h2>
+            <p className="text-xs text-muted-foreground">You'll be taken back to the sign-in page</p>
+          </div>
         </div>
-        <p className="text-sm text-muted-foreground mb-4">Sign out of your account on this device.</p>
         <Button
           variant="outline"
-          onClick={logout}
-          className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+          onClick={() => setConfirming(true)}
+          className="w-full h-11 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 font-semibold"
         >
+          <LogOut size={15} className="mr-2" />
           Sign Out
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="planner-card border border-red-200 bg-red-50">
+      <div className="flex items-center gap-3 mb-3">
+        <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+          <LogOut size={16} className="text-red-600" />
+        </div>
+        <div>
+          <h2 className="font-bold text-base text-red-700">Are you sure?</h2>
+          <p className="text-xs text-red-500">You'll need to sign back in to access your planner</p>
+        </div>
+      </div>
+      <div className="flex gap-2 mt-4">
+        <Button
+          variant="outline"
+          onClick={() => setConfirming(false)}
+          disabled={signingOut}
+          className="flex-1 h-11 border-border"
+        >
+          Cancel
+        </Button>
+        <Button
+          onClick={handleSignOut}
+          disabled={signingOut}
+          className="flex-1 h-11 bg-red-600 hover:bg-red-700 text-white font-semibold border-0"
+        >
+          {signingOut
+            ? <><Loader2 size={15} className="mr-2 animate-spin" />Signing out…</>
+            : <><LogOut size={15} className="mr-2" />Yes, sign out</>}
         </Button>
       </div>
     </div>
