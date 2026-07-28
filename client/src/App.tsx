@@ -18,6 +18,7 @@ import ResetPasswordPage from "./pages/ResetPasswordPage";
 import OnboardingPage from "./pages/OnboardingPage";
 import CommunityPage from "./pages/CommunityPage";
 import DashboardPage from "./pages/DashboardPage";
+import SubscriptionPage from "./pages/SubscriptionPage";
 import InvitePage from "./pages/InvitePage";
 import { TermsPage, PrivacyPage } from "./pages/LegalPage";
 import PlannerLayout from "./components/PlannerLayout";
@@ -71,6 +72,7 @@ function PlannerRouter() {
         <Route path="/community" component={CommunityPage} />
         <Route path="/zion" component={ZionPage} />
         <Route path="/settings" component={SettingsPage} />
+        <Route path="/subscription" component={SubscriptionPage} />
         <Route path="/404" component={NotFound} />
         <Route component={NotFound} />
       </Switch>

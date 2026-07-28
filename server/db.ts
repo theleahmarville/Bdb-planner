@@ -1,4 +1,5 @@
 import { eq, and, or, like, gte, lte, lt, isNull } from "drizzle-orm";
+import { encryptIntegrationTokens, decryptIntegrationTokens } from "./_core/tokenEncryption";
 import { drizzle } from "drizzle-orm/mysql2";
 import { DefaultLogger, LogWriter } from "drizzle-orm/logger";
 import mysql from "mysql2/promise";
@@ -152,9 +153,19 @@ export async function ensureSchema(): Promise<void> {
       { table: "user_integrations", column: "slackReadChannelIds", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `slackReadChannelIds` TEXT DEFAULT NULL" },
       { table: "user_integrations", column: "boxAccessToken", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `boxAccessToken` TEXT DEFAULT NULL" },
       { table: "user_integrations", column: "granolaApiKey", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `granolaApiKey` TEXT DEFAULT NULL" },
+      { table: "user_integrations", column: "gmailAccessToken", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `gmailAccessToken` TEXT DEFAULT NULL" },
+      { table: "user_integrations", column: "gmailRefreshToken", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `gmailRefreshToken` TEXT DEFAULT NULL" },
+      { table: "user_integrations", column: "gmailTokenExpiry", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `gmailTokenExpiry` DATETIME DEFAULT NULL" },
       { table: "users", column: "dateOfBirth", ddl: "ALTER TABLE `users` ADD COLUMN `dateOfBirth` VARCHAR(10) DEFAULT NULL" },
       { table: "users", column: "appleId", ddl: "ALTER TABLE `users` ADD COLUMN `appleId` VARCHAR(255) DEFAULT NULL" },
       { table: "users", column: "anonymizedAt", ddl: "ALTER TABLE `users` ADD COLUMN `anonymizedAt` DATETIME DEFAULT NULL" },
+      { table: "users", column: "stripeCustomerId", ddl: "ALTER TABLE `users` ADD COLUMN `stripeCustomerId` VARCHAR(255) DEFAULT NULL" },
+      { table: "users", column: "stripeSubscriptionId", ddl: "ALTER TABLE `users` ADD COLUMN `stripeSubscriptionId` VARCHAR(255) DEFAULT NULL" },
+      { table: "users", column: "subscriptionPlan", ddl: "ALTER TABLE `users` ADD COLUMN `subscriptionPlan` VARCHAR(50) NOT NULL DEFAULT 'free'" },
+      { table: "users", column: "subscriptionStatus", ddl: "ALTER TABLE `users` ADD COLUMN `subscriptionStatus` VARCHAR(50) NOT NULL DEFAULT 'active'" },
+      { table: "users", column: "subscriptionPeriodEnd", ddl: "ALTER TABLE `users` ADD COLUMN `subscriptionPeriodEnd` DATETIME DEFAULT NULL" },
+      { table: "users", column: "emailNotificationsEnabled", ddl: "ALTER TABLE `users` ADD COLUMN `emailNotificationsEnabled` BOOLEAN NOT NULL DEFAULT 1" },
+      { table: "users", column: "devotionPopupEnabled", ddl: "ALTER TABLE `users` ADD COLUMN `devotionPopupEnabled` BOOLEAN NOT NULL DEFAULT 1" },
     ];
 
     // Create community tables if they don't exist
@@ -319,6 +330,13 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     console.error("[Database] Failed to upsert user:", error);
     throw error;
   }
+}
+
+export async function getUserById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
 }
 
 export async function getUserByOpenId(openId: string) {
@@ -738,17 +756,19 @@ export async function getUserIntegrations(userId: number): Promise<UserIntegrati
   const db = await getDb();
   if (!db) return undefined;
   const result = await db.select().from(userIntegrations).where(eq(userIntegrations.userId, userId)).limit(1);
-  return result[0];
+  if (!result[0]) return undefined;
+  return decryptIntegrationTokens(result[0]) as UserIntegration;
 }
 
 export async function upsertUserIntegrations(userId: number, data: Partial<Omit<UserIntegration, "id" | "userId" | "createdAt" | "updatedAt">>) {
   const db = await getDb();
   if (!db) return;
-  const existing = await getUserIntegrations(userId);
-  if (existing) {
-    await db.update(userIntegrations).set(data as any).where(eq(userIntegrations.userId, userId));
+  const encrypted = encryptIntegrationTokens(data as Record<string, unknown>);
+  const existing = await db.select({ id: userIntegrations.id }).from(userIntegrations).where(eq(userIntegrations.userId, userId)).limit(1);
+  if (existing[0]) {
+    await db.update(userIntegrations).set(encrypted as any).where(eq(userIntegrations.userId, userId));
   } else {
-    await db.insert(userIntegrations).values({ userId, ...data } as any);
+    await db.insert(userIntegrations).values({ userId, ...encrypted } as any);
   }
 }
 
@@ -2082,13 +2102,13 @@ export async function markSchedulerRan(userId: number, jobType: string, dateKey:
 }
 
 /** Get all users who have been active in the past 60 days and have an email address */
-export async function getActiveUsers(): Promise<Array<{ id: number; name: string | null; email: string; timezone: string | null }>> {
+export async function getActiveUsers(): Promise<Array<{ id: number; name: string | null; email: string; timezone: string | null; emailNotificationsEnabled: boolean }>> {
   const pool = getPool();
   if (!pool) return [];
   const conn = await pool.getConnection();
   try {
     const [rows] = await conn.query(
-      `SELECT DISTINCT u.id, u.name, u.email, u.timezone
+      `SELECT DISTINCT u.id, u.name, u.email, u.timezone, u.emailNotificationsEnabled
        FROM \`users\` u
        WHERE u.email IS NOT NULL
          AND u.email NOT LIKE '%@bdbplanner.internal'
@@ -2106,6 +2126,7 @@ export async function getActiveUsers(): Promise<Array<{ id: number; name: string
       name: r.name ?? null,
       email: r.email as string,
       timezone: r.timezone ?? null,
+      emailNotificationsEnabled: r.emailNotificationsEnabled !== 0,
     }));
   } finally {
     conn.release();

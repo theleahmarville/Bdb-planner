@@ -27,7 +27,11 @@ import {
   sendWeekAheadEmail,
   sendMonthlyReflectionEmail,
   sendHabitNudgeEmail,
+  sendStreakReminderEmail,
+  sendStreakAtRiskEmail,
+  sendStreakLostEmail,
 } from "./_core/email";
+import { getUserStreak } from "./db";
 
 const TZ = process.env.SCHEDULER_TIMEZONE || "America/Los_Angeles";
 
@@ -96,6 +100,7 @@ async function runMorningBriefings() {
   const today = new Date().toISOString().slice(0, 10);
 
   for (const user of users) {
+    if (!user.emailNotificationsEnabled) continue;
     try {
       const alreadySent = await schedulerAlreadyRan(user.id, "morning_briefing", today);
       if (alreadySent) continue;
@@ -146,6 +151,7 @@ async function runHabitNudges() {
   const today = new Date().toISOString().slice(0, 10);
 
   for (const user of users) {
+    if (!user.emailNotificationsEnabled) continue;
     try {
       const alreadySent = await schedulerAlreadyRan(user.id, "habit_nudge", today);
       if (alreadySent) continue;
@@ -170,12 +176,14 @@ async function runSundayReviews() {
 
   // Calculate start of next week
   const nextMonday = new Date();
+
   nextMonday.setDate(nextMonday.getDate() + 1); // Monday is tomorrow (Sunday + 1)
   const nextSunday = new Date(nextMonday);
   nextSunday.setDate(nextMonday.getDate() + 6);
   const weekLabel = `${nextMonday.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${nextSunday.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
 
   for (const user of users) {
+    if (!user.emailNotificationsEnabled) continue;
     try {
       const alreadySent = await schedulerAlreadyRan(user.id, "sunday_review", today);
       if (alreadySent) continue;
@@ -231,6 +239,7 @@ async function runMonthlyReflections() {
   const today = now.toISOString().slice(0, 10);
 
   for (const user of users) {
+    if (!user.emailNotificationsEnabled) continue;
     try {
       const alreadySent = await schedulerAlreadyRan(user.id, "monthly_reflection", today);
       if (alreadySent) continue;
@@ -279,7 +288,135 @@ Be deeply personal, warm, and grounded in their actual data. This should feel li
   }
 }
 
-// ─── Job 5: Data Retention (GDPR Art. 5(1)(e), Apple App Store privacy reqs) ──
+// ─── Streak helpers ───────────────────────────────────────────────────────────
+
+/** How many full calendar days since the user was last active (0 = active today) */
+function daysSinceActive(lastActiveDate: string | null): number {
+  if (!lastActiveDate) return Infinity;
+  const todayMs = new Date(new Date().toISOString().slice(0, 10) + "T12:00:00Z").getTime();
+  const lastMs  = new Date(lastActiveDate + "T12:00:00Z").getTime();
+  return Math.round((todayMs - lastMs) / 86_400_000);
+}
+
+// ─── Job 5: Streak Check-In Reminder (AM — 10:00 am) ─────────────────────────
+
+async function runStreakReminderAM() {
+  console.log("[Scheduler] Running streak reminder AM…");
+  const users = await getActiveUsers();
+  const today = new Date().toISOString().slice(0, 10);
+
+  for (const user of users) {
+    if (!user.emailNotificationsEnabled) continue;
+    try {
+      const already = await schedulerAlreadyRan(user.id, "streak_reminder_am", today);
+      if (already) continue;
+
+      const streak = await getUserStreak(user.id);
+      const inactive = daysSinceActive(streak.lastActiveDate);
+      if (inactive === 0) continue; // already checked in today
+
+      await sendStreakReminderEmail(user.email, user.name || "", streak.currentStreak, "am");
+      await markSchedulerRan(user.id, "streak_reminder_am", today);
+    } catch (err) {
+      console.error(`[Scheduler] Streak reminder AM failed for user ${user.id}:`, err);
+    }
+  }
+}
+
+// ─── Job 6: Streak Check-In Reminder (PM — 3:00 pm) ─────────────────────────
+
+async function runStreakReminderPM() {
+  console.log("[Scheduler] Running streak reminder PM…");
+  const users = await getActiveUsers();
+  const today = new Date().toISOString().slice(0, 10);
+
+  for (const user of users) {
+    if (!user.emailNotificationsEnabled) continue;
+    try {
+      const already = await schedulerAlreadyRan(user.id, "streak_reminder_pm", today);
+      if (already) continue;
+
+      const streak = await getUserStreak(user.id);
+      const inactive = daysSinceActive(streak.lastActiveDate);
+      if (inactive === 0) continue; // already checked in today
+
+      await sendStreakReminderEmail(user.email, user.name || "", streak.currentStreak, "pm");
+      await markSchedulerRan(user.id, "streak_reminder_pm", today);
+    } catch (err) {
+      console.error(`[Scheduler] Streak reminder PM failed for user ${user.id}:`, err);
+    }
+  }
+}
+
+// ─── Job 7: Streak At-Risk Warning (7:00 pm) ─────────────────────────────────
+// Fires when the user has missed at least 1 full calendar day (inactive >= 2).
+// Uses today's date as key → one warning email per day while they keep missing.
+
+async function runStreakAtRisk() {
+  console.log("[Scheduler] Running streak at-risk check…");
+  const users = await getActiveUsers();
+  const today = new Date().toISOString().slice(0, 10);
+
+  for (const user of users) {
+    if (!user.emailNotificationsEnabled) continue;
+    try {
+      const already = await schedulerAlreadyRan(user.id, "streak_at_risk", today);
+      if (already) continue;
+
+      const streak = await getUserStreak(user.id);
+      const inactive = daysSinceActive(streak.lastActiveDate);
+      // Only send if they've missed at least 1 full day (inactive >= 2 means
+      // last active was 2+ days ago, so yesterday was completely missed)
+      if (inactive < 2) continue;
+
+      // Estimate the streak they had before the miss: walk backwards from lastActiveDate
+      // For simplicity use longestStreak as proxy when currentStreak is already 0
+      const streakBefore = streak.currentStreak > 0
+        ? streak.currentStreak
+        : streak.longestStreak;
+      const daysMissed = inactive - 1; // days fully missed (not counting today)
+
+      await sendStreakAtRiskEmail(user.email, user.name || "", streakBefore, daysMissed);
+      await markSchedulerRan(user.id, "streak_at_risk", today);
+    } catch (err) {
+      console.error(`[Scheduler] Streak at-risk failed for user ${user.id}:`, err);
+    }
+  }
+}
+
+// ─── Job 8: Streak Lost Notification (9:00 am) ───────────────────────────────
+// Fires once per streak-loss event: when 2+ full days are missed.
+// Keyed by lastActiveDate so it only fires once per distinct streak that ends.
+
+async function runStreakLost() {
+  console.log("[Scheduler] Running streak-lost check…");
+  const users = await getActiveUsers();
+
+  for (const user of users) {
+    if (!user.emailNotificationsEnabled) continue;
+    try {
+      const streak = await getUserStreak(user.id);
+      const inactive = daysSinceActive(streak.lastActiveDate);
+      // 2 full missed days = lastActiveDate was 3+ days ago
+      if (inactive < 3) continue;
+      // No previous activity to lose a streak from
+      if (!streak.lastActiveDate) continue;
+
+      // Use lastActiveDate as key so this only fires once per lost streak
+      const lossKey = `streak_lost_${streak.lastActiveDate}`;
+      const already = await schedulerAlreadyRan(user.id, "streak_lost", lossKey);
+      if (already) continue;
+
+      const streakWas = streak.longestStreak; // best proxy for the streak they lost
+      await sendStreakLostEmail(user.email, user.name || "", streakWas, streak.longestStreak);
+      await markSchedulerRan(user.id, "streak_lost", lossKey);
+    } catch (err) {
+      console.error(`[Scheduler] Streak lost failed for user ${user.id}:`, err);
+    }
+  }
+}
+
+// ─── Job 9: Data Retention ────────────────────────────────────────────────────
 // Accounts dormant for 2+ years get their PII scrubbed automatically.
 
 const RETENTION_DAYS = 730;
@@ -307,7 +444,16 @@ export function startScheduler() {
   // Morning briefing — 7:00 am daily
   cron.schedule("0 7 * * *", () => { runMorningBriefings().catch(console.error); }, { timezone: TZ });
 
-  // Habit nudge — 9:00 pm daily (only fires if user hasn't checked in)
+  // Streak reminder + lost check — 10:00 am daily
+  cron.schedule("0 10 * * *", () => {
+    runStreakReminderAM().catch(console.error);
+    runStreakLost().catch(console.error);
+  }, { timezone: TZ });
+
+  // Streak at-risk warning — 7:00 pm daily
+  cron.schedule("0 19 * * *", () => { runStreakAtRisk().catch(console.error); }, { timezone: TZ });
+
+  // Habit nudge — 9:00 pm daily
   cron.schedule("0 21 * * *", () => { runHabitNudges().catch(console.error); }, { timezone: TZ });
 
   // Sunday week-ahead review — 8:00 pm every Sunday
@@ -328,6 +474,8 @@ export function startScheduler() {
 
   console.log(`[Scheduler] ✅ Zion autonomous jobs started — timezone: ${TZ}`);
   console.log(`[Scheduler]   • Morning briefing: 7:00 am daily`);
+  console.log(`[Scheduler]   • Streak reminder:  10:00 am daily`);
+  console.log(`[Scheduler]   • Streak at-risk:   7:00 pm daily`);
   console.log(`[Scheduler]   • Habit nudge:      9:00 pm daily`);
   console.log(`[Scheduler]   • Sunday review:    8:00 pm Sundays`);
   console.log(`[Scheduler]   • Monthly reflect:  9:00 pm last day of month`);

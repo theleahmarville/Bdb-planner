@@ -174,6 +174,18 @@ async function startServer() {
     next();
   });
 
+  // Raw body for Stripe webhook signature verification (must be before JSON parsers)
+  app.use((req, _res, next) => {
+    if (req.path === "/api/stripe/webhook") {
+      let data = "";
+      req.setEncoding("utf8");
+      req.on("data", chunk => { data += chunk; });
+      req.on("end", () => { (req as any).body = data; next(); });
+    } else {
+      next();
+    }
+  });
+
   // Strict size limit for regular API requests (before 50mb parsers below)
   app.use((req, res, next) => {
     if (req.path.startsWith("/api/upload")) return next();
@@ -268,6 +280,82 @@ async function startServer() {
 
   // Email/password auth routes
   registerAuthRoutes(app);
+
+  // ── Stripe webhook (raw body required — must be before express.json middleware) ──
+  app.post("/api/stripe/webhook", async (req, res) => {
+    const sig = req.headers["stripe-signature"] as string;
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    const { getStripe } = await import("./stripe");
+    const stripe = getStripe();
+    if (!stripe || !webhookSecret) { res.json({ received: true }); return; }
+
+    let event: import("stripe").Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err: any) {
+      console.error("[Stripe] Webhook signature failed:", err.message);
+      res.status(400).send(`Webhook Error: ${err.message}`);
+      return;
+    }
+
+    const { upsertUser, getUserByEmail } = await import("../db");
+
+    const getCustomerEmail = async (customerId: string) => {
+      const customer = await stripe.customers.retrieve(customerId) as import("stripe").Stripe.Customer;
+      return customer.email ?? null;
+    };
+
+    try {
+      switch (event.type) {
+        case "customer.subscription.created":
+        case "customer.subscription.updated": {
+          const sub = event.data.object as import("stripe").Stripe.Subscription;
+          const email = await getCustomerEmail(sub.customer as string);
+          if (!email) break;
+          const user = await getUserByEmail(email);
+          if (!user) break;
+          const priceId = sub.items.data[0]?.price.id;
+          const { PLANS } = await import("./stripe");
+          const plan = Object.values(PLANS).find(p => p.priceId === priceId)?.id ?? "pro";
+          await upsertUser({
+            openId: user.openId,
+            stripeSubscriptionId: sub.id,
+            subscriptionPlan: plan,
+            subscriptionStatus: sub.status,
+            subscriptionPeriodEnd: new Date((sub as any).current_period_end * 1000),
+          } as any);
+          break;
+        }
+        case "customer.subscription.deleted": {
+          const sub = event.data.object as import("stripe").Stripe.Subscription;
+          const email = await getCustomerEmail(sub.customer as string);
+          if (!email) break;
+          const user = await getUserByEmail(email);
+          if (!user) break;
+          await upsertUser({
+            openId: user.openId,
+            subscriptionPlan: "free",
+            subscriptionStatus: "canceled",
+            stripeSubscriptionId: null,
+          } as any);
+          break;
+        }
+        case "invoice.payment_failed": {
+          const inv = event.data.object as import("stripe").Stripe.Invoice;
+          const email = await getCustomerEmail(inv.customer as string);
+          if (!email) break;
+          const user = await getUserByEmail(email);
+          if (!user) break;
+          await upsertUser({ openId: user.openId, subscriptionStatus: "past_due" } as any);
+          break;
+        }
+      }
+    } catch (err) {
+      console.error("[Stripe] Webhook handler error:", err);
+    }
+
+    res.json({ received: true });
+  });
 
   // ── Zion streaming chat (SSE) ─────────────────────────────────────────────────
   // Tokens stream to the client as they arrive from Anthropic, giving instant

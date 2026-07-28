@@ -73,6 +73,7 @@ import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 import { nanoid } from "nanoid";
 import { buildZionSystemPrompt } from "./zionPrompt";
+import { signOAuthState } from "./_core/tokenEncryption";
 
 // ─── Shared validators ────────────────────────────────────────────────────────
 const zYear = z.number().int().min(2020).max(2030);
@@ -1536,31 +1537,48 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
       let notionPages: NotionPage[] = [];
       let boxFiles: BoxFile[] = [];
 
-      const hasGoogle = !!(integration?.googleAccessToken);
+      const hasCalendar = !!(integration?.googleAccessToken);
+      const hasGmailDedicated = !!(integration as any)?.gmailAccessToken;
 
-      let googleOAuth2: any = null;
-      if (hasGoogle) {
+      let calendarOAuth2: any = null;
+      if (hasCalendar) {
         try {
           const { google } = await import("googleapis");
-          googleOAuth2 = new google.auth.OAuth2(
+          calendarOAuth2 = new google.auth.OAuth2(
             process.env.GOOGLE_CLIENT_ID,
             process.env.GOOGLE_CLIENT_SECRET,
             process.env.GOOGLE_REDIRECT_URI,
           );
-          googleOAuth2.setCredentials({
+          calendarOAuth2.setCredentials({
             access_token: integration!.googleAccessToken,
             refresh_token: integration!.googleRefreshToken ?? undefined,
           });
-        } catch { googleOAuth2 = null; }
+        } catch { calendarOAuth2 = null; }
+      }
+
+      let gmailOAuth2: any = null;
+      if (hasGmailDedicated) {
+        try {
+          const { google } = await import("googleapis");
+          gmailOAuth2 = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI,
+          );
+          gmailOAuth2.setCredentials({
+            access_token: (integration as any).gmailAccessToken,
+            refresh_token: (integration as any).gmailRefreshToken ?? undefined,
+          });
+        } catch { gmailOAuth2 = null; }
       }
 
       await Promise.all([
         // 📪 Gmail — unread important emails from last 48h
         (async () => {
-          if (!googleOAuth2 || !integration?.gmailEnabled) return;
+          if (!gmailOAuth2) return;
           try {
             const { google } = await import("googleapis");
-            const gmail = google.gmail({ version: "v1", auth: googleOAuth2 });
+            const gmail = google.gmail({ version: "v1", auth: gmailOAuth2 });
             const q = `is:unread -category:promotions -category:social newer_than:2d`;
             const listRes = await gmail.users.messages.list({ userId: "me", q, maxResults: 12 });
             const msgs = listRes.data.messages ?? [];
@@ -1599,10 +1617,10 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
 
         // 📅 Google Calendar — next 48h events
         (async () => {
-          if (!googleOAuth2) return;
+          if (!calendarOAuth2) return;
           try {
             const { google } = await import("googleapis");
-            const cal = google.calendar({ version: "v3", auth: googleOAuth2 });
+            const cal = google.calendar({ version: "v3", auth: calendarOAuth2 });
             const calId = integration?.googleCalendarId || "primary";
             const eventsRes = await cal.events.list({
               calendarId: calId,
@@ -1797,8 +1815,8 @@ Tone: warm, direct, executive. Max 4 bullets per section.`;
         briefing,
         dateLabel,
         integrations: {
-          hasGmail: !!(integration?.gmailEnabled && integration.googleAccessToken),
-          hasCalendar: !!googleOAuth2,
+          hasGmail: !!gmailOAuth2,
+          hasCalendar: !!calendarOAuth2,
           hasSlack: !!integration?.slackBotToken,
           hasNotion: !!integration?.notionToken,
           hasBox: !!integration?.boxAccessToken,
@@ -1957,6 +1975,18 @@ Write a SHORT, powerful personal affirmation (1-2 sentences) inspired by this ve
 
     return { success: true };
   }),
+
+  getHistory: protectedProcedure.query(async ({ ctx }) => {
+    const { dailyDevotions } = await import('../drizzle/schema');
+    const { eq, desc } = await import('drizzle-orm');
+    const db = await (await import('./db')).getDb();
+    if (!db) return [];
+    const rows = await db.select().from(dailyDevotions)
+      .where(eq(dailyDevotions.userId, ctx.user.id))
+      .orderBy(desc(dailyDevotions.date))
+      .limit(365);
+    return rows;
+  }),
 });
 
 // ─── Reminders Router ─────────────────────────────────────────────────────────
@@ -2062,14 +2092,13 @@ const googleCalendarRouter = router({
 
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
     // Encode userId in state so the callback can identify the user without relying on cookies
-    const state = Buffer.from(JSON.stringify({ userId: ctx.user.id })).toString("base64");
+    const state = signOAuthState({ userId: ctx.user.id });
     const url = oauth2Client.generateAuthUrl({
       access_type: "offline",
       scope: [
         "https://www.googleapis.com/auth/calendar.events",
-        "https://www.googleapis.com/auth/gmail.readonly",
       ],
-      prompt: "consent",
+      prompt: "select_account consent",
       state,
     });
     return { url };
@@ -2144,10 +2173,81 @@ const gmailRouter = router({
   /** Whether this user has Gmail scope granted */
   status: protectedProcedure.query(async ({ ctx }) => {
     const integration = await getUserIntegrations(ctx.user.id);
+    const gmailConnected = !!(integration as any)?.gmailAccessToken;
     return {
-      connected: !!(integration?.googleAccessToken),
-      gmailEnabled: !!(integration as any)?.gmailEnabled,
+      connected: gmailConnected,
+      gmailEnabled: gmailConnected,
     };
+  }),
+
+  /** Generate a Gmail-only OAuth URL (requests only gmail.readonly + basic profile) */
+  getGmailAuthUrl: protectedProcedure.mutation(async ({ ctx }) => {
+    const { google } = await import("googleapis");
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback";
+
+    if (!clientId || !clientSecret) {
+      throw new Error("Google OAuth credentials not configured on the server. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to your environment.");
+    }
+
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+    const state = signOAuthState({ userId: ctx.user.id, gmailOnly: true });
+    const url = oauth2Client.generateAuthUrl({
+      access_type: "offline",
+      scope: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/userinfo.email",
+      ],
+      prompt: "select_account consent",
+      state,
+    });
+    return { url };
+  }),
+
+  /** Fetch the last 5 email subjects to verify the connection is working */
+  testConnection: protectedProcedure.mutation(async ({ ctx }) => {
+    const integration = await getUserIntegrations(ctx.user.id);
+    const gmailToken = (integration as any)?.gmailAccessToken;
+    if (!gmailToken) throw new Error("Gmail not connected. Click Connect Gmail first.");
+
+    const { google } = await import("googleapis");
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback",
+    );
+    oauth2Client.setCredentials({
+      access_token: gmailToken,
+      refresh_token: (integration as any)?.gmailRefreshToken ?? undefined,
+    });
+
+    // Refresh token if expired
+    try {
+      const refreshed = await oauth2Client.getAccessToken();
+      if (refreshed.token && refreshed.token !== gmailToken) {
+        await upsertUserIntegrations(ctx.user.id, { gmailAccessToken: refreshed.token } as any);
+      }
+    } catch { /* token may still be valid */ }
+
+    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+    const listRes = await gmail.users.messages.list({
+      userId: "me",
+      q: "-category:promotions -category:social",
+      maxResults: 5,
+    });
+    const msgs = listRes.data.messages ?? [];
+    const subjects = await Promise.all(msgs.map(async (m) => {
+      try {
+        const d = await gmail.users.messages.get({ userId: "me", id: m.id!, format: "metadata", metadataHeaders: ["Subject", "From"] });
+        const h = d.data.payload?.headers ?? [];
+        return {
+          from: h.find((x: any) => x.name === "From")?.value ?? "Unknown",
+          subject: h.find((x: any) => x.name === "Subject")?.value ?? "(no subject)",
+        };
+      } catch { return null; }
+    }));
+    return { ok: true, recentEmails: subjects.filter(Boolean) };
   }),
 
   /** Fetch + AI-summarise today's emails */
@@ -2155,11 +2255,9 @@ const gmailRouter = router({
     .input(z.object({ date: z.string() })) // YYYY-MM-DD in user's local time
     .mutation(async ({ ctx, input }) => {
       const integration = await getUserIntegrations(ctx.user.id);
-      if (!integration?.googleAccessToken) {
-        throw new Error("Google account not connected. Connect it in Integrations.");
-      }
-      if (!(integration as any).gmailEnabled) {
-        throw new Error("Gmail access not yet granted. Re-authorize your Google account in Integrations to enable this.");
+      const gmailToken = (integration as any)?.gmailAccessToken;
+      if (!gmailToken) {
+        throw new Error("Gmail not connected. Go to Integrations and click Connect Gmail.");
       }
 
       const { google } = await import("googleapis");
@@ -2169,16 +2267,16 @@ const gmailRouter = router({
 
       const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
       oauth2Client.setCredentials({
-        access_token: integration.googleAccessToken,
-        refresh_token: integration.googleRefreshToken ?? undefined,
-        expiry_date: integration.googleTokenExpiry ? integration.googleTokenExpiry.getTime() : undefined,
+        access_token: gmailToken,
+        refresh_token: (integration as any)?.gmailRefreshToken ?? undefined,
+        expiry_date: (integration as any)?.gmailTokenExpiry ? new Date((integration as any).gmailTokenExpiry).getTime() : undefined,
       });
 
       // Refresh token if needed
       try {
         const tokenInfo = await oauth2Client.getAccessToken();
-        if (tokenInfo.token && tokenInfo.token !== integration.googleAccessToken) {
-          await upsertUserIntegrations(ctx.user.id, { googleAccessToken: tokenInfo.token } as any);
+        if (tokenInfo.token && tokenInfo.token !== gmailToken) {
+          await upsertUserIntegrations(ctx.user.id, { gmailAccessToken: tokenInfo.token } as any);
         }
       } catch { /* token might still be valid */ }
 
@@ -2518,6 +2616,84 @@ const securityRouter = router({
   }),
 });
 
+// ─── Subscription Router ──────────────────────────────────────────────────────
+const subscriptionRouter = router({
+  /** Current user's plan and status */
+  status: protectedProcedure.query(async ({ ctx }) => {
+    const { getUserById } = await import("./db");
+    const user = await getUserById(ctx.user.id) as any;
+    return {
+      plan: (user?.subscriptionPlan ?? "free") as string,
+      status: (user?.subscriptionStatus ?? "active") as string,
+      periodEnd: user?.subscriptionPeriodEnd ?? null,
+      stripeCustomerId: user?.stripeCustomerId ?? null,
+    };
+  }),
+
+  /** Create a Stripe Checkout session and return the URL */
+  createCheckout: protectedProcedure
+    .input(z.object({ planId: z.enum(["pro", "elite"]), successUrl: z.string(), cancelUrl: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { getStripe, PLANS, getOrCreateStripeCustomer } = await import("./_core/stripe");
+      const stripe = getStripe();
+      if (!stripe) throw new Error("Stripe is not configured on this server.");
+
+      const plan = PLANS[input.planId];
+      if (!plan.priceId) throw new Error(`Stripe price ID for ${input.planId} plan is not configured. Set STRIPE_${input.planId.toUpperCase()}_PRICE_ID in your environment.`);
+
+      const { getUserById } = await import("./db");
+      const user = await getUserById(ctx.user.id) as any;
+      if (!user?.email) throw new Error("Account email required for checkout.");
+
+      const customerId = await getOrCreateStripeCustomer(stripe, ctx.user.id, user.email, user.name);
+
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        mode: "subscription",
+        line_items: [{ price: plan.priceId, quantity: 1 }],
+        success_url: input.successUrl,
+        cancel_url: input.cancelUrl,
+        allow_promotion_codes: true,
+        billing_address_collection: "auto",
+        metadata: { userId: String(ctx.user.id), plan: input.planId },
+      });
+
+      return { url: session.url! };
+    }),
+
+  /** Create a Stripe Billing Portal session for managing/cancelling */
+  createPortal: protectedProcedure
+    .input(z.object({ returnUrl: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { getStripe } = await import("./_core/stripe");
+      const stripe = getStripe();
+      if (!stripe) throw new Error("Stripe is not configured.");
+
+      const { getUserById } = await import("./db");
+      const user = await getUserById(ctx.user.id) as any;
+      if (!user?.stripeCustomerId) throw new Error("No billing account found. Subscribe first.");
+
+      const session = await stripe.billingPortal.sessions.create({
+        customer: user.stripeCustomerId,
+        return_url: input.returnUrl,
+      });
+
+      return { url: session.url };
+    }),
+
+  /** Email today's Chief of Staff briefing to the user's inbox */
+  emailBriefing: protectedProcedure
+    .input(z.object({ briefing: z.string(), dateLabel: z.string(), attachFile: z.boolean().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const { getUserById } = await import("./db");
+      const user = await getUserById(ctx.user.id) as any;
+      if (!user?.email) throw new Error("No email address on your account.");
+      const { sendMorningBriefingEmail } = await import("./_core/email");
+      await sendMorningBriefingEmail(user.email, user.name ?? "there", input.briefing, input.dateLabel, input.attachFile ?? false);
+      return { ok: true };
+    }),
+});
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -2555,5 +2731,6 @@ export const appRouter = router({
   community: communityRouter,
   push: pushRouter,
   invite: inviteRouter,
+  subscription: subscriptionRouter,
 });
 export type AppRouter = typeof appRouter;

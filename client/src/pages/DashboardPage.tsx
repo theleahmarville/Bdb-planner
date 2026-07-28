@@ -149,7 +149,9 @@ function IntegrationPill({ icon, label, count, active }: { icon: React.ReactNode
 function ChiefOfStaffPanel({ onClose }: { onClose: () => void }) {
   const [briefing, setBriefing] = useState<CoSBriefing | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
   const chiefOfStaffMutation = trpc.zion.chiefOfStaff.useMutation();
+  const emailBriefingMutation = trpc.subscription.emailBriefing.useMutation();
 
   const generate = async () => {
     setLoading(true);
@@ -158,6 +160,23 @@ function ChiefOfStaffPanel({ onClose }: { onClose: () => void }) {
       setBriefing(data as CoSBriefing);
     } catch (e: any) { toast.error(e?.message ?? "Could not generate briefing."); }
     finally { setLoading(false); }
+  };
+
+  const sendToInbox = async () => {
+    if (!briefing) return;
+    setSendingEmail(true);
+    try {
+      await emailBriefingMutation.mutateAsync({
+        briefing: briefing.briefing,
+        dateLabel: briefing.dateLabel,
+        attachFile: true,
+      });
+      toast.success("Briefing sent to your inbox!");
+    } catch (e: any) {
+      toast.error(e?.message ?? "Could not send email.");
+    } finally {
+      setSendingEmail(false);
+    }
   };
 
   useEffect(() => { generate(); }, []);
@@ -178,6 +197,14 @@ function ChiefOfStaffPanel({ onClose }: { onClose: () => void }) {
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {briefing && (
+            <button onClick={sendToInbox} disabled={sendingEmail || loading}
+              className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium text-violet-700 bg-violet-100 hover:bg-violet-200 transition-colors disabled:opacity-50"
+              title="Send briefing to your inbox">
+              {sendingEmail ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+              {sendingEmail ? "Sending…" : "Send to inbox"}
+            </button>
+          )}
           <button onClick={generate} disabled={loading}
             className="w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:bg-violet-100 hover:text-violet-600 transition-colors" title="Regenerate">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />

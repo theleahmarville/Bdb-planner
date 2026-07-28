@@ -1,6 +1,6 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 const FROM_ADDRESS = process.env.EMAIL_FROM || "Be Do Become <hello@bedobecome.com>";
 const APP_URL = process.env.APP_URL || "https://bdbplanner.com";
@@ -74,7 +74,7 @@ export async function sendWelcomeEmail(to: string, name: string) {
   const firstName = name?.split(" ")[0] || "there";
 
   try {
-    await resend.emails.send({
+    await resend!.emails.send({
       from: FROM_ADDRESS,
       to,
       subject: "Welcome to BDB Digital Wellness Planner 🌟",
@@ -173,7 +173,7 @@ export async function sendPasswordResetEmail(to: string, resetToken: string) {
   }
   const resetUrl = `${APP_URL}/reset-password?token=${resetToken}`;
   try {
-    await resend.emails.send({
+    await resend!.emails.send({
       from: FROM_ADDRESS,
       to,
       subject: "Reset your BDB Digital Wellness Planner password",
@@ -228,11 +228,17 @@ export async function sendPasswordResetEmail(to: string, resetToken: string) {
 
 // ── Morning Chief of Staff Briefing ───────────────────────────────────────────
 
-export async function sendMorningBriefingEmail(to: string, name: string, briefing: string, dateLabel: string) {
+export async function sendMorningBriefingEmail(
+  to: string,
+  name: string,
+  briefing: string,
+  dateLabel: string,
+  attachText?: boolean, // attach briefing as a .txt file
+) {
   if (!process.env.RESEND_API_KEY) return;
   const firstName = name?.split(" ")[0] || "there";
   try {
-    await resend.emails.send({
+    const payload: any = {
       from: FROM_ADDRESS,
       to,
       subject: `☀️ Good morning, ${firstName} — Your Zion Briefing for ${dateLabel}`,
@@ -248,7 +254,14 @@ export async function sendMorningBriefingEmail(to: string, name: string, briefin
           ${mdToHtml(briefing)}
         </div>`
       ),
-    });
+    };
+    if (attachText) {
+      payload.attachments = [{
+        filename: `briefing-${dateLabel.replace(/[^a-z0-9]/gi, "-").toLowerCase()}.txt`,
+        content: Buffer.from(briefing, "utf8").toString("base64"),
+      }];
+    }
+    await resend!.emails.send(payload);
     console.log(`[Email] Morning briefing sent to ${to}`);
   } catch (err) {
     console.error("[Email] Failed to send morning briefing:", err);
@@ -261,7 +274,7 @@ export async function sendWeekAheadEmail(to: string, name: string, content: stri
   if (!process.env.RESEND_API_KEY) return;
   const firstName = name?.split(" ")[0] || "there";
   try {
-    await resend.emails.send({
+    await resend!.emails.send({
       from: FROM_ADDRESS,
       to,
       subject: `🗓️ ${firstName}, your week ahead is ready — ${weekLabel}`,
@@ -290,7 +303,7 @@ export async function sendMonthlyReflectionEmail(to: string, name: string, conte
   if (!process.env.RESEND_API_KEY) return;
   const firstName = name?.split(" ")[0] || "there";
   try {
-    await resend.emails.send({
+    await resend!.emails.send({
       from: FROM_ADDRESS,
       to,
       subject: `🌙 ${firstName}, your ${monthLabel} reflection is here`,
@@ -319,7 +332,7 @@ export async function sendHabitNudgeEmail(to: string, name: string) {
   if (!process.env.RESEND_API_KEY) return;
   const firstName = name?.split(" ")[0] || "there";
   try {
-    await resend.emails.send({
+    await resend!.emails.send({
       from: FROM_ADDRESS,
       to,
       subject: `⏰ ${firstName}, your daily check-in is waiting`,
@@ -347,5 +360,167 @@ export async function sendHabitNudgeEmail(to: string, name: string) {
     console.log(`[Email] Habit nudge sent to ${to}`);
   } catch (err) {
     console.error("[Email] Failed to send habit nudge:", err);
+  }
+}
+
+// ── Streak Reminder (twice-daily check-in prompt) ─────────────────────────────
+
+export async function sendStreakReminderEmail(
+  to: string,
+  name: string,
+  currentStreak: number,
+  slot: "am" | "pm",
+) {
+  if (!process.env.RESEND_API_KEY) return;
+  const firstName = name?.split(" ")[0] || "there";
+  const isAM = slot === "am";
+  const streakLine = currentStreak > 0
+    ? `<div style="text-align:center;margin:16px 0 20px;">
+        <div style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;border-radius:12px;padding:12px 24px;">
+          <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;opacity:.85;">Current Streak</p>
+          <p style="margin:4px 0 0;font-size:32px;font-weight:900;line-height:1;">🔥 ${currentStreak}</p>
+          <p style="margin:2px 0 0;font-size:11px;opacity:.85;">${currentStreak === 1 ? "day" : "days"} in a row</p>
+        </div>
+      </div>`
+    : "";
+  const subject = isAM
+    ? `☀️ ${firstName}, your planner is ready — keep your streak alive!`
+    : `⏰ ${firstName}, last chance to check in today`;
+  const opener = isAM
+    ? `Good morning, <strong>${firstName}</strong>! A quick nudge from Zion — you haven't logged your check-in yet today.`
+    : `Hey <strong>${firstName}</strong>, it's afternoon and your daily check-in is still waiting.`;
+  const closing = isAM
+    ? `Showing up consistently is how you <strong>Be Do Become</strong>. Your planner takes less than 60 seconds to update. 🌟`
+    : `The day isn't over yet. Every check-in counts — even a quick one before tonight. 💛`;
+
+  try {
+    await resend!.emails.send({
+      from: FROM_ADDRESS,
+      to,
+      subject,
+      html: emailShell(
+        "linear-gradient(135deg,#f59e0b,#d97706)",
+        isAM ? "☀️" : "⏰",
+        isAM ? "Time to Check In" : "Don't Forget Today",
+        isAM ? "Morning nudge from Zion" : "Afternoon reminder from Zion",
+        `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#4a4a4a;">${opener}</p>
+        ${streakLine}
+        <div style="background:#fffbeb;border-radius:12px;padding:20px 24px;border-left:4px solid #f59e0b;">
+          <p style="margin:0;font-size:14px;line-height:1.7;color:#4a4a4a;">${closing}</p>
+        </div>`
+      ),
+    });
+    console.log(`[Email] Streak reminder (${slot}) sent to ${to}`);
+  } catch (err) {
+    console.error("[Email] Failed to send streak reminder:", err);
+  }
+}
+
+// ── Streak At Risk (missed 1 full day, warning) ────────────────────────────────
+
+export async function sendStreakAtRiskEmail(
+  to: string,
+  name: string,
+  streakBefore: number, // streak they had before missing days
+  daysMissed: number,   // number of full days missed so far
+) {
+  if (!process.env.RESEND_API_KEY) return;
+  const firstName = name?.split(" ")[0] || "there";
+  const streakLabel = streakBefore > 0 ? `${streakBefore}-day` : "your";
+  const urgency = daysMissed === 1
+    ? `You missed <strong>1 day</strong>. Your streak is on the line — check in today to start rebuilding it.`
+    : `You've missed <strong>${daysMissed} days</strong> in a row. Every day you come back is a step forward.`;
+
+  try {
+    await resend!.emails.send({
+      from: FROM_ADDRESS,
+      to,
+      subject: `⚠️ ${firstName}, your ${streakLabel} streak is at risk`,
+      html: emailShell(
+        "linear-gradient(135deg,#ef4444,#dc2626)",
+        "⚠️",
+        "Streak at Risk",
+        "A message from Zion, your AI Chief of Staff",
+        `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#4a4a4a;">
+          Hey <strong>${firstName}</strong>, Zion here with an important check-in.
+        </p>
+        ${streakBefore > 0 ? `<div style="text-align:center;margin:16px 0 20px;">
+          <div style="display:inline-block;background:#fef2f2;border:2px dashed #fca5a5;border-radius:12px;padding:12px 24px;">
+            <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#dc2626;">Streak at Risk</p>
+            <p style="margin:4px 0 0;font-size:32px;font-weight:900;line-height:1;color:#dc2626;">🔥 ${streakBefore}</p>
+            <p style="margin:2px 0 0;font-size:11px;color:#ef4444;">${streakBefore === 1 ? "day" : "days"} — protect it!</p>
+          </div>
+        </div>` : ""}
+        <div style="background:#fef2f2;border-radius:12px;padding:20px 24px;border-left:4px solid #ef4444;margin-bottom:16px;">
+          <p style="margin:0 0 8px;font-size:14px;line-height:1.7;color:#4a4a4a;">${urgency}</p>
+          <p style="margin:0;font-size:14px;line-height:1.7;color:#4a4a4a;">
+            Consistency isn't about being perfect — it's about coming back. <strong>Open your planner now.</strong>
+          </p>
+        </div>
+        <p style="margin:0;font-size:13px;color:#8a7a6a;text-align:center;">
+          A quick check-in, a single word, one goal reviewed — that's all it takes. 💪
+        </p>`
+      ),
+    });
+    console.log(`[Email] Streak at-risk sent to ${to} (${daysMissed} days missed, streak was ${streakBefore})`);
+  } catch (err) {
+    console.error("[Email] Failed to send streak at-risk email:", err);
+  }
+}
+
+// ── Streak Lost (2+ full days missed — streak officially reset) ───────────────
+
+export async function sendStreakLostEmail(
+  to: string,
+  name: string,
+  streakWas: number,    // streak they had before losing it
+  longestEver: number,  // all-time longest streak
+) {
+  if (!process.env.RESEND_API_KEY) return;
+  const firstName = name?.split(" ")[0] || "there";
+  const isPR = streakWas >= longestEver && streakWas > 0;
+
+  try {
+    await resend!.emails.send({
+      from: FROM_ADDRESS,
+      to,
+      subject: `💔 ${firstName}, your streak has reset — but you can start again today`,
+      html: emailShell(
+        "linear-gradient(135deg,#6366f1,#4f46e5)",
+        "💔",
+        "Streak Reset",
+        "From Zion, your AI Chief of Staff",
+        `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#4a4a4a;">
+          Hey <strong>${firstName}</strong>, after 2 missed days your streak has officially reset.
+        </p>
+        ${streakWas > 1 ? `<div style="text-align:center;margin:16px 0 20px;">
+          <div style="display:inline-block;background:#f5f3ff;border:2px solid #c4b5fd;border-radius:12px;padding:12px 24px;">
+            <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#6366f1;">You Had a</p>
+            <p style="margin:4px 0 0;font-size:32px;font-weight:900;line-height:1;color:#6366f1;">🔥 ${streakWas}</p>
+            <p style="margin:2px 0 0;font-size:11px;color:#7c3aed;">${streakWas === 1 ? "day" : "days"} streak${isPR ? " · Your best ever!" : ""}</p>
+          </div>
+        </div>` : ""}
+        <div style="background:#f5f3ff;border-radius:12px;padding:20px 24px;border-left:4px solid #6366f1;margin-bottom:16px;">
+          <p style="margin:0 0 8px;font-size:14px;line-height:1.7;color:#4a4a4a;">
+            Missing days happens to everyone. What matters is what you do <em>next</em>.
+          </p>
+          <p style="margin:0;font-size:14px;line-height:1.7;color:#4a4a4a;">
+            <strong>Today is Day 1.</strong> Open your planner right now, log your check-in, and your new streak starts immediately. 🚀
+          </p>
+        </div>
+        ${longestEver > 0 ? `<div style="background:#f0fdf4;border-radius:10px;padding:14px 20px;border-left:4px solid #22c55e;margin-top:12px;">
+          <p style="margin:0;font-size:13px;color:#15803d;">
+            <strong>🏆 Your longest streak ever: ${longestEver} ${longestEver === 1 ? "day" : "days"}.</strong>
+            You've done it before — you can do it again.
+          </p>
+        </div>` : ""}
+        <p style="margin:16px 0 0;font-size:13px;color:#8a7a6a;text-align:center;">
+          Be Do Become is a practice, not a performance. Come back. 💜
+        </p>`
+      ),
+    });
+    console.log(`[Email] Streak lost email sent to ${to} (streak was ${streakWas})`);
+  } catch (err) {
+    console.error("[Email] Failed to send streak lost email:", err);
   }
 }

@@ -9,6 +9,7 @@ import { ENV } from "./env";
 import { google } from "googleapis";
 import { sendWelcomeEmail, sendPasswordResetEmail } from "./email";
 import { SignJWT, jwtVerify, createRemoteJWKSet } from "jose";
+import { verifyOAuthState } from "./tokenEncryption";
 import { auditFromReq, recordLoginAttempt, isLockedOut } from "./auditLog";
 import { validatePasswordStrength, sanitizeString, logSecurityEvent } from "./security";
 
@@ -66,12 +67,17 @@ export function registerAuthRoutes(app: Express) {
       // Extract userId from the state parameter (more reliable than cookie during OAuth redirect)
       const stateParam = req.query.state as string | undefined;
       let userId: number | null = null;
+      let gmailOnly = false;
+
       if (stateParam) {
         try {
-          const decoded = JSON.parse(Buffer.from(stateParam, "base64").toString("utf-8"));
-          userId = decoded.userId ?? null;
+          const decoded = verifyOAuthState(stateParam);
+          userId = typeof decoded.userId === "number" ? decoded.userId : null;
+          gmailOnly = !!decoded.gmailOnly;
         } catch {
-          console.error("[Auth] Failed to parse OAuth state param");
+          console.error("[Auth] OAuth state signature invalid — possible CSRF attempt");
+          res.redirect("/integrations?error=google_auth_failed");
+          return;
         }
       }
       // Fallback to cookie-based auth if state is missing
@@ -90,15 +96,26 @@ export function registerAuthRoutes(app: Express) {
       // Check whether Gmail scope was granted in this auth flow
       const grantedScopes: string = (tokens.scope as string) ?? "";
       const hasGmailScope = grantedScopes.includes("gmail");
+      const hasCalendarScope = grantedScopes.includes("calendar");
 
-      await db.upsertUserIntegrations(userId, {
-        googleAccessToken: tokens.access_token ?? null,
-        googleRefreshToken: tokens.refresh_token ?? null,
-        googleTokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
-        ...(hasGmailScope ? { gmailEnabled: 1 } : {}),
-      } as any);
+      const updates: Record<string, unknown> = {};
 
-      res.redirect(hasGmailScope ? "/integrations?connected=google_gmail" : "/integrations?connected=google");
+      if (gmailOnly) {
+        // Gmail-only flow — store in dedicated Gmail token columns
+        updates.gmailAccessToken = tokens.access_token ?? null;
+        updates.gmailTokenExpiry = tokens.expiry_date ? new Date(tokens.expiry_date) : null;
+        if (tokens.refresh_token) updates.gmailRefreshToken = tokens.refresh_token;
+      } else {
+        // Calendar flow — store in Google Calendar token columns
+        updates.googleAccessToken = tokens.access_token ?? null;
+        updates.googleTokenExpiry = tokens.expiry_date ? new Date(tokens.expiry_date) : null;
+        if (tokens.refresh_token) updates.googleRefreshToken = tokens.refresh_token;
+      }
+
+      await db.upsertUserIntegrations(userId, updates as any);
+
+      const redirect = gmailOnly ? "/integrations?connected=gmail" : "/integrations?connected=google";
+      res.redirect(redirect);
     } catch (error) {
       console.error("[Auth] Google OAuth callback failed:", error);
       res.redirect("/integrations?error=google_auth_failed");
@@ -304,7 +321,7 @@ export function registerAuthRoutes(app: Express) {
     try {
       const user = await authService.authenticateRequest(req);
       if (!user) { res.status(401).json({ error: "Not authenticated" }); return; }
-      const { name, currentPassword, newPassword, newEmail, avatarUrl, bio, timezone, onboardingCompleted } = req.body;
+      const { name, currentPassword, newPassword, newEmail, avatarUrl, bio, timezone, onboardingCompleted, emailNotificationsEnabled, devotionPopupEnabled } = req.body;
       const dbUser = await db.getUserByOpenId(user.openId);
       if (!dbUser) { res.status(404).json({ error: "User not found" }); return; }
       const updates: Record<string, any> = { openId: user.openId };
@@ -313,6 +330,8 @@ export function registerAuthRoutes(app: Express) {
       if (bio !== undefined) updates.bio = bio.trim().slice(0, 280) || null;
       if (timezone !== undefined) updates.timezone = timezone;
       if (onboardingCompleted !== undefined) updates.onboardingCompleted = onboardingCompleted;
+      if (emailNotificationsEnabled !== undefined) updates.emailNotificationsEnabled = !!emailNotificationsEnabled;
+      if (devotionPopupEnabled !== undefined) updates.devotionPopupEnabled = !!devotionPopupEnabled;
       // ── Email change ────────────────────────────────────────────────────────
       if (newEmail) {
         if (!currentPassword) { res.status(400).json({ error: "Current password is required to change email" }); return; }
@@ -337,7 +356,7 @@ export function registerAuthRoutes(app: Express) {
       }
       await db.upsertUser(updates as any);
       const updated = await db.getUserByOpenId(user.openId);
-      res.json({ success: true, user: { id: updated?.id, name: updated?.name, email: updated?.email, avatarUrl: (updated as any)?.avatarUrl, bio: (updated as any)?.bio, timezone: (updated as any)?.timezone, onboardingCompleted: (updated as any)?.onboardingCompleted } });
+      res.json({ success: true, user: { id: updated?.id, name: updated?.name, email: updated?.email, avatarUrl: (updated as any)?.avatarUrl, bio: (updated as any)?.bio, timezone: (updated as any)?.timezone, onboardingCompleted: (updated as any)?.onboardingCompleted, emailNotificationsEnabled: (updated as any)?.emailNotificationsEnabled ?? true, devotionPopupEnabled: (updated as any)?.devotionPopupEnabled ?? true } });
     } catch (error) {
       console.error("[Auth] Profile update failed", error);
       res.status(500).json({ error: "Failed to update profile" });

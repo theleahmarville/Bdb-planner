@@ -32,9 +32,14 @@ export default function IntegrationsPage() {
     enabled: isAuthenticated,
   });
   const getAuthUrlMutation = trpc.googleCalendar.getAuthUrl.useMutation();
+  const getGmailAuthUrlMutation = trpc.gmail.getGmailAuthUrl.useMutation();
+  const testGmailMutation = trpc.gmail.testConnection.useMutation();
   const disconnectGoogleMutation = trpc.googleCalendar.disconnect.useMutation();
   const [gcalConnecting, setGcalConnecting] = useState(false);
   const [gcalDisconnecting, setGcalDisconnecting] = useState(false);
+  const [gmailConnecting, setGmailConnecting] = useState(false);
+  const [gmailTesting, setGmailTesting] = useState(false);
+  const [gmailTestResult, setGmailTestResult] = useState<{ from: string; subject: string }[] | null>(null);
 
   // Slack (outbound webhook + read bot token)
   const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
@@ -84,8 +89,13 @@ export default function IntegrationsPage() {
       window.history.replaceState({}, "", "/integrations");
     }
     if (connectedParam === "google_gmail") {
-      toast.success("Google Calendar + Gmail connected! Zion can now summarise your emails.");
+      toast.success("Google Calendar + Gmail connected! Zion can now read your inbox.");
       refetchGcal();
+      refetchGmail();
+      window.history.replaceState({}, "", "/integrations");
+    }
+    if (connectedParam === "gmail") {
+      toast.success("Gmail connected! Chief of Staff will now include your inbox.");
       refetchGmail();
       window.history.replaceState({}, "", "/integrations");
     }
@@ -124,6 +134,34 @@ export default function IntegrationsPage() {
       toast.error("Failed to disconnect.");
     } finally {
       setGcalDisconnecting(false);
+    }
+  };
+
+  const handleConnectGmail = async () => {
+    setGmailConnecting(true);
+    try {
+      const { url } = await getGmailAuthUrlMutation.mutateAsync();
+      window.location.href = url;
+      setTimeout(() => setGmailConnecting(false), 10000);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Failed to start Gmail OAuth.";
+      toast.error(message);
+      setGmailConnecting(false);
+    }
+  };
+
+  const handleTestGmail = async () => {
+    setGmailTesting(true);
+    try {
+      const result = await testGmailMutation.mutateAsync();
+      setGmailTestResult(result.recentEmails.filter((e): e is { from: string; subject: string } => e !== null));
+      toast.success("Gmail connection verified!");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Gmail test failed.";
+      toast.error(message);
+      setGmailTestResult(null);
+    } finally {
+      setGmailTesting(false);
     }
   };
 
@@ -340,54 +378,6 @@ export default function IntegrationsPage() {
           </div>
         )}
 
-        {/* ── Gmail sub-section ── */}
-        {gcalConnected && (
-          <div className="mt-4 pt-4 border-t border-border">
-            <div className="flex items-center gap-3 mb-3">
-              {/* Gmail envelope icon */}
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "#EA4335" }}>
-                <svg viewBox="0 0 24 24" className="w-4 h-4" fill="white">
-                  <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
-                </svg>
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <p className="font-semibold text-sm">Gmail Summary for Zion</p>
-                  {gmailStatus?.gmailEnabled ? (
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-100 rounded-full px-2 py-0.5">
-                      <Check size={10} /> Enabled
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5">
-                      Re-auth needed
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground">Let Zion read & summarise your emails from the day.</p>
-              </div>
-            </div>
-            {gmailStatus?.gmailEnabled ? (
-              <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-start gap-2">
-                <Check size={14} className="text-green-600 mt-0.5 flex-shrink-0" />
-                <p className="text-xs text-green-700">Gmail access granted. In Zion, tap the <strong>Emails</strong> chip to get a daily summary.</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
-                  <AlertCircle size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-amber-700">
-                    Your current Google connection doesn't include Gmail access. Click <strong>Re-authorize</strong> to grant it — your calendar will still work.
-                  </p>
-                </div>
-                <Button size="sm" onClick={handleConnectGoogle} disabled={gcalConnecting} variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50">
-                  {gcalConnecting ? <Loader2 size={12} className="mr-1.5 animate-spin" /> : null}
-                  Re-authorize to enable Gmail
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-
         <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
           <div className="flex items-start gap-2">
             <Info size={14} className="text-blue-600 mt-0.5 flex-shrink-0" />
@@ -396,6 +386,91 @@ export default function IntegrationsPage() {
             </p>
           </div>
         </div>
+      </div>
+
+      {/* ── Gmail (standalone) ── */}
+      <div className="planner-card mb-6">
+        <div className="flex items-start gap-4 mb-4">
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm" style={{ background: "#EA4335" }}>
+            <svg viewBox="0 0 24 24" className="w-7 h-7" fill="white">
+              <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+            </svg>
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <h2 className="font-bold text-lg">Gmail</h2>
+              {gmailStatus?.gmailEnabled ? (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-100 rounded-full px-2 py-0.5">
+                  <Check size={11} /> Connected
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground bg-muted rounded-full px-2 py-0.5">
+                  <WifiOff size={11} /> Not connected
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground">Power your Chief of Staff briefings with real email context — follow-ups, open threads, and team updates.</p>
+          </div>
+        </div>
+
+        {gmailStatus?.gmailEnabled ? (
+          <div className="space-y-3">
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-start gap-2">
+              <Check size={15} className="text-green-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-green-700">Gmail is connected</p>
+                <p className="text-xs text-green-600 mt-0.5">Zion reads your inbox to surface follow-ups, drafts, and open threads in daily briefings.</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleTestGmail}
+                disabled={gmailTesting}
+              >
+                {gmailTesting ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <Wifi size={14} className="mr-1.5" />}
+                Test Connection
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleConnectGmail}
+                disabled={gmailConnecting}
+              >
+                {gmailConnecting ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
+                Re-authorize
+              </Button>
+            </div>
+            {gmailTestResult && (
+              <div className="bg-muted/50 rounded-lg p-3 space-y-1">
+                <p className="text-xs font-semibold text-muted-foreground mb-2">Recent emails:</p>
+                {gmailTestResult.map((email, i) => (
+                  <div key={i} className="text-xs">
+                    <span className="font-medium">{email.from}</span>
+                    <span className="text-muted-foreground"> — {email.subject}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="bg-muted/50 rounded-lg p-3">
+              <p className="text-sm text-muted-foreground">
+                Connect Gmail to let Zion surface follow-ups, drafts, and open threads from your inbox — no Google Calendar required.
+              </p>
+            </div>
+            <Button onClick={handleConnectGmail} disabled={gmailConnecting} style={{ background: "#EA4335" }} className="text-white hover:opacity-90">
+              {gmailConnecting ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : (
+                <svg viewBox="0 0 24 24" className="w-4 h-4 mr-1.5" fill="currentColor">
+                  <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                </svg>
+              )}
+              Connect Gmail
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* ── Slack ── */}
