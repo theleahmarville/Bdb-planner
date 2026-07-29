@@ -2181,12 +2181,48 @@ const gmailRouter = router({
     };
   }),
 
+  /** Diagnose Gmail OAuth configuration — shows what redirect URI is in use and tests the token */
+  diagnose: protectedProcedure.query(async ({ ctx }) => {
+    const redirectUri = getGoogleRedirectUri();
+    const credentialsSet = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+    const integration = await getUserIntegrations(ctx.user.id);
+    const hasToken = !!(integration as any)?.gmailAccessToken;
+    const hasCalendarToken = !!integration?.googleAccessToken;
+
+    let tokenTest: { ok: boolean; error?: string } | null = null;
+    if (hasToken) {
+      try {
+        const { google } = await import("googleapis");
+        const oauth2Client = new google.auth.OAuth2(
+          process.env.GOOGLE_CLIENT_ID,
+          process.env.GOOGLE_CLIENT_SECRET,
+          redirectUri,
+        );
+        oauth2Client.setCredentials({
+          access_token: (integration as any).gmailAccessToken,
+          refresh_token: (integration as any).gmailRefreshToken ?? undefined,
+        });
+        const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+        await gmail.users.getProfile({ userId: "me" });
+        tokenTest = { ok: true };
+      } catch (err: any) {
+        const msg: string = err?.message ?? String(err);
+        tokenTest = { ok: false, error: msg };
+      }
+    }
+
+    console.log(`[Gmail] diagnose for user ${ctx.user.id}: redirectUri=${redirectUri} creds=${credentialsSet} hasToken=${hasToken} tokenOk=${tokenTest?.ok}`);
+    return { redirectUri, credentialsSet, hasToken, hasCalendarToken, tokenTest };
+  }),
+
   /** Generate a Gmail-only OAuth URL (requests only gmail.readonly + basic profile) */
   getGmailAuthUrl: protectedProcedure.mutation(async ({ ctx }) => {
     const { google } = await import("googleapis");
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
     const redirectUri = getGoogleRedirectUri();
+
+    console.log(`[Gmail] OAuth URL requested by user ${ctx.user.id}, redirectUri=${redirectUri}`);
 
     if (!clientId || !clientSecret) {
       throw new Error("Google OAuth credentials not configured on the server. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to your environment.");

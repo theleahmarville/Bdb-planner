@@ -31,6 +31,10 @@ export default function IntegrationsPage() {
   const { data: gmailStatus, refetch: refetchGmail } = trpc.gmail.status.useQuery(undefined, {
     enabled: isAuthenticated,
   });
+  const { data: gmailDiag, refetch: refetchGmailDiag } = trpc.gmail.diagnose.useQuery(undefined, {
+    enabled: isAuthenticated,
+    staleTime: 30_000,
+  });
   const getAuthUrlMutation = trpc.googleCalendar.getAuthUrl.useMutation();
   const getGmailAuthUrlMutation = trpc.gmail.getGmailAuthUrl.useMutation();
   const testGmailMutation = trpc.gmail.testConnection.useMutation();
@@ -40,6 +44,7 @@ export default function IntegrationsPage() {
   const [gmailConnecting, setGmailConnecting] = useState(false);
   const [gmailTesting, setGmailTesting] = useState(false);
   const [gmailTestResult, setGmailTestResult] = useState<{ from: string; subject: string }[] | null>(null);
+  const [showGmailDiag, setShowGmailDiag] = useState(false);
 
   // Slack (outbound webhook + read bot token)
   const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
@@ -97,6 +102,7 @@ export default function IntegrationsPage() {
     if (connectedParam === "gmail") {
       toast.success("Gmail connected! Chief of Staff will now include your inbox.");
       refetchGmail();
+      refetchGmailDiag();
       window.history.replaceState({}, "", "/integrations");
     }
     if (errorParam) {
@@ -470,20 +476,80 @@ export default function IntegrationsPage() {
               )}
               Connect Gmail
             </Button>
-            <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer hover:text-foreground flex items-center gap-1">
-                <Info size={11} /> Having trouble connecting?
-              </summary>
-              <div className="mt-2 pl-3 border-l-2 border-border space-y-1.5">
-                <p>Make sure these are done in <strong>Google Cloud Console</strong>:</p>
-                <ol className="list-decimal list-inside space-y-1">
-                  <li>Enable the <strong>Gmail API</strong> (APIs &amp; Services → Library → search "Gmail")</li>
-                  <li>Add <code className="bg-muted px-1 rounded text-[10px]">https://www.googleapis.com/auth/gmail.readonly</code> to your OAuth consent screen scopes</li>
-                  <li>Add your email as a test user if the app is in Testing mode</li>
-                  <li>If Google shows an "Unverified app" warning, click <strong>Advanced → Go to the app</strong></li>
-                </ol>
-              </div>
-            </details>
+            <div className="text-xs">
+              <button
+                className="flex items-center gap-1 text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                onClick={() => { setShowGmailDiag(v => !v); refetchGmailDiag(); }}
+              >
+                <Info size={11} /> {showGmailDiag ? "Hide setup guide" : "Having trouble? View setup guide"}
+              </button>
+              {showGmailDiag && (
+                <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-3 text-xs">
+                  <p className="font-semibold text-amber-800">Google Cloud Console checklist for Gmail</p>
+
+                  {/* Redirect URI */}
+                  {gmailDiag?.redirectUri && (
+                    <div className="space-y-1">
+                      <p className="font-medium text-amber-700">① Add this Authorized Redirect URI in GCP → Credentials → OAuth 2.0 Client ID:</p>
+                      <div className="flex items-center gap-2 bg-white border border-amber-200 rounded px-2 py-1.5">
+                        <code className="flex-1 text-[11px] break-all text-slate-700">{gmailDiag.redirectUri}</code>
+                        <button
+                          className="text-amber-600 hover:text-amber-800 font-medium flex-shrink-0"
+                          onClick={() => { navigator.clipboard.writeText(gmailDiag!.redirectUri); toast.success("Copied!"); }}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                      <p className="text-amber-600">This must exactly match one of the entries in your OAuth client's redirect URIs list.</p>
+                    </div>
+                  )}
+
+                  <ol className="list-decimal list-inside space-y-1.5 text-amber-700">
+                    <li>Enable the <strong>Gmail API</strong> — APIs &amp; Services → Library → search "Gmail API" → Enable</li>
+                    <li>Add scope <code className="bg-white border border-amber-200 px-1 rounded text-[10px]">https://www.googleapis.com/auth/gmail.readonly</code> to the OAuth consent screen (Scopes tab)</li>
+                    <li>Add your email address as a <strong>test user</strong> on the consent screen (Test users tab) while app is in Testing mode</li>
+                    <li>If Google shows "Unverified app", click <strong>Advanced → Go to [app name]</strong></li>
+                  </ol>
+
+                  {/* Live status */}
+                  {gmailDiag && (
+                    <div className="pt-1 border-t border-amber-200 space-y-1">
+                      <p className="font-medium text-amber-800">Current status:</p>
+                      <div className="flex items-center gap-1.5">
+                        <span className={gmailDiag.credentialsSet ? "text-green-600" : "text-red-600"}>
+                          {gmailDiag.credentialsSet ? "✓" : "✗"}
+                        </span>
+                        <span>Google OAuth credentials configured</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={gmailDiag.hasCalendarToken ? "text-green-600" : "text-amber-500"}>
+                          {gmailDiag.hasCalendarToken ? "✓" : "○"}
+                        </span>
+                        <span>Google Calendar connected (same OAuth app)</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={gmailDiag.hasToken ? "text-green-600" : "text-amber-500"}>
+                          {gmailDiag.hasToken ? "✓" : "○"}
+                        </span>
+                        <span>Gmail token saved</span>
+                      </div>
+                      {gmailDiag.tokenTest && (
+                        <div className="flex items-start gap-1.5">
+                          <span className={gmailDiag.tokenTest.ok ? "text-green-600" : "text-red-600"}>
+                            {gmailDiag.tokenTest.ok ? "✓" : "✗"}
+                          </span>
+                          <span>
+                            {gmailDiag.tokenTest.ok
+                              ? "Token works — Gmail API responds correctly"
+                              : `Token test failed: ${gmailDiag.tokenTest.error}`}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
