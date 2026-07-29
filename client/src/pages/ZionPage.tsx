@@ -207,6 +207,7 @@ function ActionCardsGroup({
     utils.bigGoals.invalidate();
     utils.annual.invalidate();
     utils.notes.invalidate();
+    utils.reminders.invalidate();
   };
 
   const saveMutation = trpc.zion.saveParsedItem.useMutation();

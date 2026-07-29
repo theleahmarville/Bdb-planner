@@ -1344,14 +1344,14 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
         // ── Reminder → reminders table (fires browser notification) ──────────────
         case 'reminder': {
           const { reminders: remindersTable } = await import('../drizzle/schema');
-          const db = await (await import('./db')).getDb();
-          if (!db) throw new Error('DB not available');
+          const dbConn = await (await import('./db')).getDb();
+          if (!dbConn) throw new Error('DB not available');
           // Parse the reminder date/time
           const rDate = input.reminderDate ?? todayDate;
           const rTime = input.reminderTime ?? (input.time ? normaliseTime(input.time) : '09:00');
           const [rHour, rMin] = rTime.split(':').map(Number);
           const reminderAt = new Date(`${rDate}T${rTime}:00`);
-          // Also write to daily schedule so it appears on the calendar
+          // Also write to daily schedule so it appears in the planner
           const existing = await getDailyEntry(userId, rDate);
           const timeSlots: Record<string, string> = (existing?.timeSlots as any) ?? {};
           const slotKey = `${String(rHour).padStart(2,'0')}:${String(rMin).padStart(2,'0')}`;
@@ -1359,7 +1359,7 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
           timeSlots[slotKey] = currentSlot ? `${currentSlot}; ⏰ ${input.content}` : `⏰ ${input.content}`;
           await upsertDailyEntry(userId, rDate, { timeSlots });
           // Insert reminder row
-          await db.insert(remindersTable).values({
+          await dbConn.insert(remindersTable).values({
             userId,
             title: input.content.slice(0, 512),
             reminderAt,
@@ -1369,20 +1369,74 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
             notifySlack: false,
             sent: false,
           });
-          return { success: true, target: `Reminder set for ${rDate} at ${rTime}`, navPath: `/weekly/${year}/${weekNumber}` };
+          // Push to Google Calendar if connected
+          try {
+            const integration = await getUserIntegrations(userId);
+            if (integration?.googleAccessToken) {
+              const { google } = await import('googleapis');
+              const oauth2Client = new (google.auth.OAuth2)(
+                process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, getGoogleRedirectUri()
+              );
+              oauth2Client.setCredentials({ access_token: integration.googleAccessToken, refresh_token: integration.googleRefreshToken ?? undefined });
+              const cal = google.calendar({ version: 'v3', auth: oauth2Client });
+              const endTime = `${String(rHour + (rMin + 30 >= 60 ? 1 : 0)).padStart(2,'0')}:${String((rMin + 30) % 60).padStart(2,'0')}`;
+              await cal.events.insert({
+                calendarId: integration.googleCalendarId ?? 'primary',
+                requestBody: {
+                  summary: input.content,
+                  start: { dateTime: `${rDate}T${slotKey}:00` },
+                  end:   { dateTime: `${rDate}T${endTime}:00` },
+                },
+              });
+            }
+          } catch (gcalErr) {
+            console.error('[Zion] Google Calendar push failed (reminder):', gcalErr);
+          }
+          // navPath: navigate to the week containing rDate
+          const rDateObj = new Date(rDate + 'T12:00:00');
+          const rWeek = getISOWeek(rDateObj);
+          const rYear = rDateObj.getFullYear();
+          return { success: true, target: `Reminder set for ${rDate} at ${rTime}`, navPath: `/weekly/${rYear}/${rWeek}` };
         }
 
-        // ── Calendar (explicit date) → daily_entries timeSlots ─────────────────
+        // ── Calendar (explicit date) → daily_entries timeSlots + Google Calendar ─
         case 'calendar': {
-          // 'calendar' is like 'schedule' but uses reminderDate as the target date
           const targetDate = input.reminderDate ?? (input.day ? dayNameToDate(input.day) : todayDate);
           const existing = await getDailyEntry(userId, targetDate);
           const timeSlots: Record<string, string> = (existing?.timeSlots as any) ?? {};
-          const timeKey = input.time ? normaliseTime(input.time) : (input.reminderTime ?? '09:00');
+          const timeKey = input.time ? normaliseTime(input.time) : (input.reminderTime ? normaliseTime(input.reminderTime) : '09:00');
           const currentSlot = timeSlots[timeKey] ?? '';
           timeSlots[timeKey] = currentSlot ? `${currentSlot}; ${input.content}` : input.content;
           await upsertDailyEntry(userId, targetDate, { timeSlots });
-          return { success: true, target: `Calendar — ${targetDate} at ${timeKey}`, navPath: `/weekly/${year}/${weekNumber}` };
+          // Push to Google Calendar if connected
+          try {
+            const integration = await getUserIntegrations(userId);
+            if (integration?.googleAccessToken) {
+              const { google } = await import('googleapis');
+              const oauth2Client = new (google.auth.OAuth2)(
+                process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, getGoogleRedirectUri()
+              );
+              oauth2Client.setCredentials({ access_token: integration.googleAccessToken, refresh_token: integration.googleRefreshToken ?? undefined });
+              const cal = google.calendar({ version: 'v3', auth: oauth2Client });
+              const [tHour, tMin] = timeKey.split(':').map(Number);
+              const endTime = `${String(tHour + (tMin + 30 >= 60 ? 1 : 0)).padStart(2,'0')}:${String((tMin + 30) % 60).padStart(2,'0')}`;
+              await cal.events.insert({
+                calendarId: integration.googleCalendarId ?? 'primary',
+                requestBody: {
+                  summary: input.content,
+                  start: { dateTime: `${targetDate}T${timeKey}:00` },
+                  end:   { dateTime: `${targetDate}T${endTime}:00` },
+                },
+              });
+            }
+          } catch (gcalErr) {
+            console.error('[Zion] Google Calendar push failed (calendar):', gcalErr);
+          }
+          // navPath: navigate to the week containing targetDate
+          const tDateObj = new Date(targetDate + 'T12:00:00');
+          const tWeek = getISOWeek(tDateObj);
+          const tYear = tDateObj.getFullYear();
+          return { success: true, target: `Calendar — ${targetDate} at ${timeKey}`, navPath: `/weekly/${tYear}/${tWeek}` };
         }
 
         // ── Budget → monthly_plans financial fields ───────────────────────────
