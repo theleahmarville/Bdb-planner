@@ -3052,6 +3052,55 @@ const adminPanelRouter = router({
       return results;
     } finally { conn.release(); }
   }),
+
+  // ── User Deletion ──────────────────────────────────────────────────────────
+  deleteUser: adminProcedure
+    .input(z.object({ userId: z.number().int() }))
+    .mutation(async ({ input }) => {
+      const { deleteUserData } = await import("./db");
+      await deleteUserData(input.userId);
+      return { ok: true };
+    }),
+
+  // ── Community Moderation ───────────────────────────────────────────────────
+  listCommunityMessages: adminProcedure
+    .input(z.object({
+      limit: z.number().int().min(1).max(200).default(50),
+      beforeId: z.number().int().optional(),
+      showDeleted: z.boolean().default(true),
+      showFlagged: z.boolean().default(false),
+    }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return [];
+      const conn = await pool.getConnection();
+      try {
+        const conditions: string[] = [];
+        if (input.beforeId) conditions.push(`m.id < ${Number(input.beforeId)}`);
+        if (input.showFlagged) conditions.push("m.flagCount > 0");
+        if (!input.showDeleted) conditions.push("(m.isDeleted = 0 AND m.deletedByAdmin = 0)");
+        const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+        const [rows] = await conn.query(
+          `SELECT m.id, m.userId, m.content, m.isDeleted, m.deletedByAdmin, m.flagCount, m.createdAt,
+                  u.name as userName, u.email as userEmail, u.subscriptionPlan
+           FROM community_messages m
+           JOIN users u ON u.id = m.userId
+           ${where}
+           ORDER BY m.createdAt DESC LIMIT ?`,
+          [input.limit]
+        );
+        return rows as any[];
+      } finally { conn.release(); }
+    }),
+
+  deleteCommunityMessage: adminProcedure
+    .input(z.object({ messageId: z.number().int() }))
+    .mutation(async ({ input }) => {
+      const { adminDeleteCommunityMessage } = await import("./db");
+      await adminDeleteCommunityMessage(input.messageId);
+      return { ok: true };
+    }),
 });
 
 export const appRouter = router({

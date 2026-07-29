@@ -4,11 +4,11 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import {
-  Users, BarChart2, Settings, Mail, Shield, Home,
-  TrendingUp, Crown, RefreshCw, ChevronDown, Search,
+  Users, BarChart2, Mail, Shield, Home,
+  TrendingUp, Crown, RefreshCw, Search,
   AlertTriangle, CheckCircle2, Clock, Loader2, Send,
-  Database, Activity, UserCheck, DollarSign, Zap,
-  Edit2, Save, X, ChevronUp, Eye, Ban, Star,
+  Database, Activity, UserCheck, DollarSign,
+  Edit2, Save, X, Eye, Ban, Star, Trash2, MessageSquare,
 } from "lucide-react";
 
 // ── Simple SVG Bar Chart ─────────────────────────────────────────────────────
@@ -122,12 +122,13 @@ const ROLE_BADGE: Record<string, string> = {
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 const TABS = [
-  { id: "overview",   label: "Overview",  icon: Home },
-  { id: "users",      label: "Users",     icon: Users },
-  { id: "analytics",  label: "Analytics", icon: BarChart2 },
-  { id: "plans",      label: "Plans",     icon: Crown },
-  { id: "broadcast",  label: "Broadcast", icon: Mail },
-  { id: "system",     label: "System",    icon: Shield },
+  { id: "overview",   label: "Overview",   icon: Home },
+  { id: "users",      label: "Users",      icon: Users },
+  { id: "analytics",  label: "Analytics",  icon: BarChart2 },
+  { id: "community",  label: "Community",  icon: MessageSquare },
+  { id: "plans",      label: "Plans",      icon: Crown },
+  { id: "broadcast",  label: "Broadcast",  icon: Mail },
+  { id: "system",     label: "System",     icon: Shield },
 ] as const;
 type Tab = typeof TABS[number]["id"];
 
@@ -196,6 +197,7 @@ function UsersTab() {
   const [offset, setOffset] = useState(0);
   const [expandedUser, setExpandedUser] = useState<number | null>(null);
   const [editingPlan, setEditingPlan] = useState<number | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const limit = 25;
 
   const { data, isLoading, refetch } = trpc.adminPanel.listUsers.useQuery({ search, plan, role, status, limit, offset, sortBy: "createdAt", sortDir: "desc" });
@@ -203,7 +205,11 @@ function UsersTab() {
 
   const setPlanMut = trpc.adminPanel.setPlan.useMutation({ onSuccess: () => { toast.success("Plan updated"); refetch(); setEditingPlan(null); } });
   const setRoleMut = trpc.adminPanel.setRole.useMutation({ onSuccess: () => { toast.success("Role updated"); refetch(); } });
-  const setSuspendedMut = trpc.adminPanel.setSuspended.useMutation({ onSuccess: () => { toast.success("Status updated"); refetch(); } });
+  const setSuspendedMut = trpc.adminPanel.setSuspended.useMutation({ onSuccess: () => { toast.success("User blocked"); refetch(); } });
+  const deleteUserMut = trpc.adminPanel.deleteUser.useMutation({
+    onSuccess: () => { toast.success("User deleted and data erased"); refetch(); setConfirmDelete(null); setExpandedUser(null); },
+    onError: (e) => toast.error(e.message),
+  });
 
   const users = (data?.users ?? []) as any[];
   const total = data?.total ?? 0;
@@ -311,13 +317,47 @@ function UsersTab() {
                           </button>
                           <button
                             onClick={() => setSuspendedMut.mutate({ userId: u.id, suspended: u.subscriptionStatus !== "suspended" })}
-                            title={u.subscriptionStatus === "suspended" ? "Unsuspend" : "Suspend"}
-                            className={`p-1.5 rounded-lg hover:bg-muted transition-colors ${u.subscriptionStatus === "suspended" ? "text-emerald-500" : "text-muted-foreground hover:text-red-500"}`}>
+                            title={u.subscriptionStatus === "suspended" ? "Unblock user" : "Block user"}
+                            className={`p-1.5 rounded-lg hover:bg-muted transition-colors ${u.subscriptionStatus === "suspended" ? "text-emerald-500" : "text-muted-foreground hover:text-orange-500"}`}>
                             <Ban size={13} />
+                          </button>
+                          <button
+                            onClick={() => setConfirmDelete(u.id)}
+                            title="Delete user permanently"
+                            className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-red-500">
+                            <Trash2 size={13} />
                           </button>
                         </div>
                       </td>
                     </tr>
+
+                    {/* Delete confirmation row */}
+                    {confirmDelete === u.id && (
+                      <tr key={`del-${u.id}`}>
+                        <td colSpan={8} className="bg-red-50 dark:bg-red-950/20 border-y border-red-200 dark:border-red-900 px-6 py-3">
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                            <p className="text-sm text-red-800 dark:text-red-300 flex-1">
+                              <strong>Permanently delete</strong> <em>{u.name ?? u.email}</em>? All their data will be erased. This cannot be undone.
+                            </p>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => deleteUserMut.mutate({ userId: u.id })}
+                                disabled={deleteUserMut.isPending}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60">
+                                {deleteUserMut.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 size={11} />}
+                                Delete forever
+                              </button>
+                              <button onClick={() => setConfirmDelete(null)}
+                                className="px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-muted">
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+
                     {/* Expanded user detail */}
                     {expandedUser === u.id && (
                       <tr key={`detail-${u.id}`}>
@@ -751,6 +791,131 @@ function SystemTab() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// COMMUNITY MODERATION TAB
+// ═════════════════════════════════════════════════════════════════════════════
+function CommunityTab() {
+  const [showDeleted, setShowDeleted] = useState(true);
+  const [showFlagged, setShowFlagged] = useState(false);
+  const [confirmDeleteMsg, setConfirmDeleteMsg] = useState<number | null>(null);
+
+  const { data: messages = [], isLoading, refetch } = trpc.adminPanel.listCommunityMessages.useQuery(
+    { limit: 100, showDeleted, showFlagged },
+    { refetchOnWindowFocus: false }
+  );
+
+  const deleteMsgMut = trpc.adminPanel.deleteCommunityMessage.useMutation({
+    onSuccess: () => { toast.success("Message removed"); refetch(); setConfirmDeleteMsg(null); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const fmtDate = (d: any) => {
+    try { return new Date(d).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
+    catch { return "—"; }
+  };
+
+  const msgs = messages as any[];
+
+  return (
+    <div className="space-y-4">
+      {/* Filters */}
+      <div className="planner-card p-4 flex flex-wrap items-center gap-4">
+        <p className="text-sm font-bold flex-1">Community Messages</p>
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" checked={showDeleted} onChange={e => setShowDeleted(e.target.checked)}
+            className="w-3.5 h-3.5 accent-violet-600" />
+          Show deleted
+        </label>
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" checked={showFlagged} onChange={e => setShowFlagged(e.target.checked)}
+            className="w-3.5 h-3.5 accent-red-600" />
+          Flagged only
+        </label>
+        <button onClick={() => refetch()} className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-muted">
+          <RefreshCw size={12} /> Refresh
+        </button>
+      </div>
+
+      <p className="text-xs text-muted-foreground">{msgs.length} messages loaded</p>
+
+      {isLoading ? (
+        <div className="flex justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-violet-500" /></div>
+      ) : (
+        <div className="space-y-2">
+          {msgs.map((m: any) => {
+            const isRemoved = m.isDeleted || m.deletedByAdmin;
+            return (
+              <div key={m.id}
+                className={`planner-card p-4 ${isRemoved ? "opacity-50" : ""} ${m.flagCount > 0 ? "border-red-200 dark:border-red-900 bg-red-50/30 dark:bg-red-950/10" : ""}`}>
+                <div className="flex items-start gap-3">
+                  {/* Avatar placeholder */}
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-indigo-500 flex items-center justify-center flex-shrink-0 text-white text-xs font-bold">
+                    {(m.userName ?? "?")[0]?.toUpperCase()}
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                      <span className="text-sm font-semibold">{m.userName ?? "Unknown"}</span>
+                      <span className="text-[10px] text-muted-foreground">{m.userEmail}</span>
+                      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${PLAN_BADGE[m.subscriptionPlan ?? "free"] ?? PLAN_BADGE.free}`}>
+                        {(m.subscriptionPlan ?? "free").toUpperCase()}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground ml-auto">{fmtDate(m.createdAt)}</span>
+                    </div>
+
+                    <p className={`text-sm leading-relaxed ${isRemoved ? "italic text-muted-foreground" : "text-foreground"}`}>
+                      {isRemoved ? "[Message removed]" : m.content}
+                    </p>
+
+                    {m.flagCount > 0 && (
+                      <div className="flex items-center gap-1 mt-1">
+                        <AlertTriangle className="w-3 h-3 text-red-500" />
+                        <span className="text-[11px] text-red-500 font-semibold">{m.flagCount} flag{m.flagCount !== 1 ? "s" : ""}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex-shrink-0">
+                    {!isRemoved && (
+                      confirmDeleteMsg === m.id ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-red-500">Remove?</span>
+                          <button onClick={() => deleteMsgMut.mutate({ messageId: m.id })} disabled={deleteMsgMut.isPending}
+                            className="px-2.5 py-1 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60 flex items-center gap-1">
+                            {deleteMsgMut.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : null}Yes
+                          </button>
+                          <button onClick={() => setConfirmDeleteMsg(null)}
+                            className="px-2 py-1 text-xs border border-border rounded-lg hover:bg-muted">No</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setConfirmDeleteMsg(m.id)}
+                          title="Delete this message"
+                          className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-red-500">
+                          <Trash2 size={14} />
+                        </button>
+                      )
+                    )}
+                    {isRemoved && (
+                      <span className="text-[10px] px-2 py-1 rounded-full bg-muted text-muted-foreground">Removed</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {msgs.length === 0 && (
+            <div className="text-center py-12 text-muted-foreground">
+              <MessageSquare className="w-10 h-10 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">No messages found.</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ═════════════════════════════════════════════════════════════════════════════
 export default function AdminPage() {
@@ -816,12 +981,13 @@ export default function AdminPage() {
         </div>
 
         {/* Tab content */}
-        {activeTab === "overview"  && <OverviewTab />}
-        {activeTab === "users"     && <UsersTab />}
-        {activeTab === "analytics" && <AnalyticsTab />}
-        {activeTab === "plans"     && <PlansTab />}
-        {activeTab === "broadcast" && <BroadcastTab />}
-        {activeTab === "system"    && <SystemTab />}
+        {activeTab === "overview"   && <OverviewTab />}
+        {activeTab === "users"      && <UsersTab />}
+        {activeTab === "analytics"  && <AnalyticsTab />}
+        {activeTab === "community"  && <CommunityTab />}
+        {activeTab === "plans"      && <PlansTab />}
+        {activeTab === "broadcast"  && <BroadcastTab />}
+        {activeTab === "system"     && <SystemTab />}
       </div>
     </div>
   );
