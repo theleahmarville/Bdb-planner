@@ -2039,16 +2039,28 @@ const remindersRouter = router({
 });
 
 // ─── Slack Router ─────────────────────────────────────────────────────────────
+async function postToSlack(integration: { slackBotToken?: string | null; slackWebhookUrl?: string | null; slackChannelName?: string | null }, text: string) {
+  const { default: axios } = await import("axios");
+  const botToken = (integration as any).slackBotToken;
+  if (botToken) {
+    const channel = integration.slackChannelName || "#general";
+    const res = await axios.post("https://slack.com/api/chat.postMessage",
+      { channel, text },
+      { headers: { Authorization: `Bearer ${botToken}`, "Content-Type": "application/json" } },
+    );
+    if (!res.data.ok) throw new Error(`Slack API error: ${res.data.error ?? "unknown"}`);
+  } else if (integration.slackWebhookUrl) {
+    await axios.post(integration.slackWebhookUrl, { text });
+  } else {
+    throw new Error("No Slack connection found. Add your Bot Token in Integrations.");
+  }
+}
+
 const slackRouter = router({
   testWebhook: protectedProcedure.mutation(async ({ ctx }) => {
     const integration = await getUserIntegrations(ctx.user.id);
-    if (!integration?.slackWebhookUrl) {
-      throw new Error("No Slack webhook URL configured. Please add it in Integrations.");
-    }
-    const { default: axios } = await import("axios");
-    await axios.post(integration.slackWebhookUrl, {
-      text: "✅ BDB Digital Wellness Planner — Slack integration test successful! Your notifications are working.",
-    });
+    if (!integration) throw new Error("No Slack connection found. Add your Bot Token in Integrations.");
+    await postToSlack(integration as any, "✅ BDB Planner — Slack integration test successful! Chief of Staff can now read your messages.");
     return { success: true };
   }),
 
@@ -2056,9 +2068,7 @@ const slackRouter = router({
     .input(z.object({ date: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const integration = await getUserIntegrations(ctx.user.id);
-      if (!integration?.slackWebhookUrl) {
-        throw new Error("No Slack webhook URL configured. Please add it in Integrations.");
-      }
+      if (!integration) throw new Error("No Slack connection found. Add your Bot Token in Integrations.");
 
       const daily = await getDailyEntry(ctx.user.id, input.date);
       const priorities: string[] = (daily?.topPriorities as string[] | null) ?? [];
@@ -2072,9 +2082,7 @@ const slackRouter = router({
         .join("\n") || "_No schedule entries_";
 
       const text = `📅 *BDB Daily Summary — ${input.date}*\n\n*Today's Top Priorities:*\n${priorityLines}\n\n*Today's Schedule:*\n${scheduleLines}`;
-
-      const { default: axios } = await import("axios");
-      await axios.post(integration.slackWebhookUrl, { text });
+      await postToSlack(integration as any, text);
       return { success: true };
     }),
 });

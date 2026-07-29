@@ -46,18 +46,17 @@ export default function IntegrationsPage() {
   const [gmailTestResult, setGmailTestResult] = useState<{ from: string; subject: string }[] | null>(null);
   const [showGmailDiag, setShowGmailDiag] = useState(false);
 
-  // Slack (outbound webhook + read bot token)
-  const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
-  const [slackChannelName, setSlackChannelName] = useState("");
+  // Slack
   const [slackBotToken, setSlackBotToken] = useState("");
+  const [slackChannelName, setSlackChannelName] = useState("");
   const [slackSaving, setSlackSaving] = useState(false);
+  const [slackTesting, setSlackTesting] = useState(false);
+  const [slackSending, setSlackSending] = useState(false);
+  const testWebhookMutation = trpc.slack.testWebhook.useMutation();
+  const sendDailySummaryMutation = trpc.slack.sendDailySummary.useMutation();
   // Box
   const [boxAccessToken, setBoxAccessToken] = useState("");
   const [boxSaving, setBoxSaving] = useState(false);
-  const testWebhookMutation = trpc.slack.testWebhook.useMutation();
-  const sendDailySummaryMutation = trpc.slack.sendDailySummary.useMutation();
-  const [slackTesting, setSlackTesting] = useState(false);
-  const [slackSending, setSlackSending] = useState(false);
 
   // Notion (legacy)
   const { data: annualData, refetch: refetchAnnual } = trpc.annual.get.useQuery({ year: YEAR }, { enabled: isAuthenticated });
@@ -70,9 +69,8 @@ export default function IntegrationsPage() {
   // Populate Slack + Box fields from DB
   useEffect(() => {
     if (integrations) {
-      if ((integrations as any).slackWebhookUrl && !slackWebhookUrl) setSlackWebhookUrl((integrations as any).slackWebhookUrl);
-      if ((integrations as any).slackChannelName && !slackChannelName) setSlackChannelName((integrations as any).slackChannelName);
       if ((integrations as any).slackBotToken && !slackBotToken) setSlackBotToken((integrations as any).slackBotToken);
+      if ((integrations as any).slackChannelName && !slackChannelName) setSlackChannelName((integrations as any).slackChannelName);
       if ((integrations as any).boxAccessToken && !boxAccessToken) setBoxAccessToken((integrations as any).boxAccessToken);
     }
   }, [integrations]);
@@ -176,9 +174,8 @@ export default function IntegrationsPage() {
     setSlackSaving(true);
     try {
       await saveIntegrationsMutation.mutateAsync({
-        slackWebhookUrl: slackWebhookUrl || undefined,
-        slackChannelName: slackChannelName || undefined,
         slackBotToken: slackBotToken || undefined,
+        slackChannelName: slackChannelName || undefined,
       });
       await refetchIntegrations();
       toast.success("Slack settings saved!");
@@ -236,7 +233,7 @@ export default function IntegrationsPage() {
     try {
       await clearIntegrationsMutation.mutateAsync({ field: "slack" });
       await refetchIntegrations();
-      setSlackWebhookUrl("");
+      setSlackBotToken("");
       setSlackChannelName("");
       toast.success("Slack settings cleared.");
     } catch {
@@ -315,7 +312,7 @@ export default function IntegrationsPage() {
   }
 
   const gcalConnected = gcalStatus?.connected ?? false;
-  const slackConnected = !!(integrations?.slackWebhookUrl);
+  const slackConnected = !!(integrations as any)?.slackBotToken;
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
@@ -575,42 +572,13 @@ export default function IntegrationsPage() {
                 </span>
               )}
             </div>
-            <p className="text-sm text-muted-foreground">Send daily summaries and reminder notifications to your Slack workspace.</p>
+            <p className="text-sm text-muted-foreground">Read your Slack messages in Chief of Staff briefings and send daily summaries to your workspace.</p>
           </div>
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-3">
           <div>
-            <label className="text-sm font-semibold block mb-1">Slack Incoming Webhook URL</label>
-            <p className="text-xs text-muted-foreground mb-2">
-              Create an incoming webhook at{" "}
-              <a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">
-                api.slack.com/messaging/webhooks <ExternalLink size={10} />
-              </a>
-            </p>
-            <input
-              type="url"
-              value={slackWebhookUrl}
-              onChange={(e) => setSlackWebhookUrl(e.target.value)}
-              placeholder="https://hooks.slack.com/services/..."
-              className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary font-mono"
-            />
-          </div>
-
-          <div>
-            <label className="text-sm font-semibold block mb-1">Channel Name (optional)</label>
-            <input
-              type="text"
-              value={slackChannelName}
-              onChange={(e) => setSlackChannelName(e.target.value)}
-              placeholder="#general"
-              className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
-            />
-          </div>
-
-          <div>
-            <label className="text-sm font-semibold block mb-1">Bot Token <span className="font-normal text-muted-foreground">(for Chief of Staff — reads DMs & mentions)</span></label>
-            <p className="text-xs text-muted-foreground mb-2">Create a Slack app with <code>channels:history</code> and <code>im:history</code> scopes, install it, then paste the Bot User OAuth Token here.</p>
+            <label className="text-sm font-semibold block mb-1">Bot Token</label>
             <input
               type="password"
               value={slackBotToken}
@@ -620,58 +588,63 @@ export default function IntegrationsPage() {
             />
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={handleSaveSlack} disabled={slackSaving} size="sm">
+          <div>
+            <label className="text-sm font-semibold block mb-1">
+              Notification Channel <span className="font-normal text-muted-foreground">(for daily summaries)</span>
+            </label>
+            <input
+              type="text"
+              value={slackChannelName}
+              onChange={(e) => setSlackChannelName(e.target.value)}
+              placeholder="#general"
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button onClick={handleSaveSlack} disabled={slackSaving || !slackBotToken} size="sm">
               {slackSaving ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
-              Save Slack Settings
+              {slackConnected ? "Update" : "Connect Slack"}
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleClearSlack}
-              disabled={slackClearing}
-              className="text-destructive hover:text-destructive"
-            >
-              {slackClearing ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
-              Clear Slack Settings
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleTestWebhook}
-              disabled={slackTesting || !slackConnected}
-              title={!slackConnected ? "Save a webhook URL first" : undefined}
-            >
-              {slackTesting ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <Wifi size={14} className="mr-1.5" />}
-              Test Webhook
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleSendDailySummary}
-              disabled={slackSending || !slackConnected}
-              title={!slackConnected ? "Save a webhook URL first" : undefined}
-            >
-              {slackSending ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
-              Send Today's Summary
-            </Button>
+            {slackConnected && (
+              <>
+                <Button variant="outline" size="sm" onClick={handleTestWebhook} disabled={slackTesting}>
+                  {slackTesting ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <Wifi size={14} className="mr-1.5" />}
+                  Test
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleSendDailySummary} disabled={slackSending}>
+                  {slackSending ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
+                  Send Today's Summary
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleClearSlack}
+                  disabled={slackClearing}
+                  className="text-destructive hover:text-destructive"
+                >
+                  {slackClearing ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
+                  Disconnect
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
-        <div className="mt-4 p-3 bg-emerald-50 rounded-lg border border-emerald-100">
-          <div className="flex items-start gap-2">
-            <Info size={14} className="text-emerald-600 mt-0.5 flex-shrink-0" />
-            <div className="text-xs text-emerald-700">
-              <p className="font-medium mb-1">Slack setup steps:</p>
-              <ol className="list-decimal ml-4 space-y-0.5">
-                <li>Go to <strong>api.slack.com/apps</strong> and create a new app</li>
-                <li>Enable <strong>Incoming Webhooks</strong> and add a webhook to your workspace</li>
-                <li>Copy the webhook URL and paste it above</li>
-                <li>Save, then test with the "Test Webhook" button</li>
-              </ol>
-            </div>
+        <details className="mt-4 text-xs text-muted-foreground">
+          <summary className="cursor-pointer hover:text-foreground flex items-center gap-1">
+            <Info size={11} /> How to get a Bot Token
+          </summary>
+          <div className="mt-2 pl-3 border-l-2 border-border space-y-1.5">
+            <ol className="list-decimal list-inside space-y-1">
+              <li>Go to <a href="https://api.slack.com/apps" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">api.slack.com/apps <ExternalLink size={9} className="inline" /></a> → <strong>Create New App</strong> → From scratch</li>
+              <li>Under <strong>OAuth & Permissions</strong>, add these Bot Token Scopes: <code className="bg-muted px-1 rounded">channels:history</code> <code className="bg-muted px-1 rounded">im:history</code> <code className="bg-muted px-1 rounded">chat:write</code></li>
+              <li>Click <strong>Install to Workspace</strong> and approve</li>
+              <li>Copy the <strong>Bot User OAuth Token</strong> (starts with <code className="bg-muted px-1 rounded">xoxb-</code>) and paste it above</li>
+              <li>Invite the bot to your notification channel: <code className="bg-muted px-1 rounded">/invite @your-app-name</code></li>
+            </ol>
           </div>
-        </div>
+        </details>
       </div>
 
       {/* ── Notion (legacy) ── */}
