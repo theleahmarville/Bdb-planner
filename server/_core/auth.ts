@@ -45,9 +45,25 @@ function validateAge(dateOfBirth: unknown): string | null {
   return null;
 }
 
+/** Resolves the Google OAuth redirect URI — prefers explicit env var, falls back to Railway domain */
+export function getGoogleRedirectUri(): string {
+  if (process.env.GOOGLE_REDIRECT_URI) return process.env.GOOGLE_REDIRECT_URI;
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/api/auth/google/callback`;
+  return "http://localhost:3000/api/auth/google/callback";
+}
+
 export function registerAuthRoutes(app: Express) {
   // GET /api/auth/google/callback — Google OAuth callback
   app.get("/api/auth/google/callback", async (req: Request, res: Response) => {
+    // Google sends an error param when the user denies access or the scope is blocked
+    const googleError = req.query.error as string | undefined;
+    if (googleError) {
+      console.error(`[Auth] Google OAuth returned error: ${googleError} — description: ${req.query.error_description ?? "(none)"}`);
+      const errCode = googleError === "access_denied" ? "google_access_denied" : "google_auth_failed";
+      res.redirect(`/integrations?error=${errCode}`);
+      return;
+    }
+
     const code = req.query.code as string | undefined;
     if (!code) {
       res.redirect("/integrations?error=google_no_code");
@@ -56,7 +72,7 @@ export function registerAuthRoutes(app: Express) {
 
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback";
+    const redirectUri = getGoogleRedirectUri();
 
     if (!clientId || !clientSecret) {
       res.redirect("/integrations?error=google_not_configured");

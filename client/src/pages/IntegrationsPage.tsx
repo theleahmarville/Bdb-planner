@@ -102,10 +102,11 @@ export default function IntegrationsPage() {
     if (errorParam) {
       const messages: Record<string, string> = {
         google_not_configured: "Google OAuth credentials not configured on server.",
-        google_auth_failed: "Google authentication failed. Please try again.",
-        google_no_code: "Google returned no authorization code.",
+        google_auth_failed: "Google authorization failed. Check that the Gmail API is enabled in Google Cloud Console and that gmail.readonly scope is added to your OAuth consent screen.",
+        google_no_code: "Google returned no authorization code — you may have denied access.",
+        google_access_denied: "Access denied. You may have clicked 'Back to safety'. Click Connect Gmail again and choose Advanced → Go to the app to proceed.",
       };
-      toast.error(messages[errorParam] ?? "Connection failed.");
+      toast.error(messages[errorParam] ?? `Connection failed (${errorParam}).`, { duration: 8000 });
       window.history.replaceState({}, "", "/integrations");
     }
   }, [connectedParam, errorParam]);
@@ -469,6 +470,20 @@ export default function IntegrationsPage() {
               )}
               Connect Gmail
             </Button>
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer hover:text-foreground flex items-center gap-1">
+                <Info size={11} /> Having trouble connecting?
+              </summary>
+              <div className="mt-2 pl-3 border-l-2 border-border space-y-1.5">
+                <p>Make sure these are done in <strong>Google Cloud Console</strong>:</p>
+                <ol className="list-decimal list-inside space-y-1">
+                  <li>Enable the <strong>Gmail API</strong> (APIs &amp; Services → Library → search "Gmail")</li>
+                  <li>Add <code className="bg-muted px-1 rounded text-[10px]">https://www.googleapis.com/auth/gmail.readonly</code> to your OAuth consent screen scopes</li>
+                  <li>Add your email as a test user if the app is in Testing mode</li>
+                  <li>If Google shows an "Unverified app" warning, click <strong>Advanced → Go to the app</strong></li>
+                </ol>
+              </div>
+            </details>
           </div>
         )}
       </div>

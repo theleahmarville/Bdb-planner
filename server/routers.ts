@@ -3,6 +3,7 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
+import { getGoogleRedirectUri } from "./_core/auth";
 import {
   getAnnualPlan,
   upsertAnnualPlan,
@@ -1547,7 +1548,7 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
           calendarOAuth2 = new google.auth.OAuth2(
             process.env.GOOGLE_CLIENT_ID,
             process.env.GOOGLE_CLIENT_SECRET,
-            process.env.GOOGLE_REDIRECT_URI,
+            getGoogleRedirectUri(),
           );
           calendarOAuth2.setCredentials({
             access_token: integration!.googleAccessToken,
@@ -1563,7 +1564,7 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
           gmailOAuth2 = new google.auth.OAuth2(
             process.env.GOOGLE_CLIENT_ID,
             process.env.GOOGLE_CLIENT_SECRET,
-            process.env.GOOGLE_REDIRECT_URI,
+            getGoogleRedirectUri(),
           );
           gmailOAuth2.setCredentials({
             access_token: (integration as any).gmailAccessToken,
@@ -2084,7 +2085,7 @@ const googleCalendarRouter = router({
     const { google } = await import("googleapis");
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback";
+    const redirectUri = getGoogleRedirectUri();
 
     if (!clientId || !clientSecret) {
       throw new Error("Google OAuth credentials not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file.");
@@ -2131,7 +2132,7 @@ const googleCalendarRouter = router({
       const { google } = await import("googleapis");
       const clientId = process.env.GOOGLE_CLIENT_ID;
       const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-      const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback";
+      const redirectUri = getGoogleRedirectUri();
 
       const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
       oauth2Client.setCredentials({
@@ -2185,7 +2186,7 @@ const gmailRouter = router({
     const { google } = await import("googleapis");
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback";
+    const redirectUri = getGoogleRedirectUri();
 
     if (!clientId || !clientSecret) {
       throw new Error("Google OAuth credentials not configured on the server. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to your environment.");
@@ -2215,7 +2216,7 @@ const gmailRouter = router({
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback",
+      getGoogleRedirectUri(),
     );
     oauth2Client.setCredentials({
       access_token: gmailToken,
@@ -2263,7 +2264,7 @@ const gmailRouter = router({
       const { google } = await import("googleapis");
       const clientId = process.env.GOOGLE_CLIENT_ID!;
       const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
-      const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback";
+      const redirectUri = getGoogleRedirectUri();
 
       const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
       oauth2Client.setCredentials({
