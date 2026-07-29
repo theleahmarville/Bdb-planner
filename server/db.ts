@@ -279,6 +279,21 @@ export async function ensureSchema(): Promise<void> {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
+    // Email OTP table — 2FA codes for login and registration
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`email_otps\` (
+        \`id\`        INT AUTO_INCREMENT PRIMARY KEY,
+        \`email\`     VARCHAR(255) NOT NULL,
+        \`code\`      VARCHAR(6) NOT NULL,
+        \`type\`      ENUM('login','signup') NOT NULL,
+        \`attempts\`  TINYINT NOT NULL DEFAULT 0,
+        \`expiresAt\` DATETIME NOT NULL,
+        \`usedAt\`    DATETIME DEFAULT NULL,
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`idx_email_type\` (\`email\`, \`type\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
     for (const { table, column, ddl } of checks) {
       const [rows] = await conn.query(
         `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
@@ -297,6 +312,55 @@ export async function ensureSchema(): Promise<void> {
   } finally {
     conn.release();
   }
+}
+
+// ─── Email OTP helpers ────────────────────────────────────────────────────────
+
+export async function createOtp(email: string, type: "login" | "signup"): Promise<string> {
+  const pool = getPool();
+  if (!pool) throw new Error("DB unavailable");
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+  // Invalidate any existing unused OTP for this email+type
+  await pool.query(
+    `UPDATE email_otps SET usedAt = NOW() WHERE email = ? AND type = ? AND usedAt IS NULL`,
+    [email.toLowerCase(), type]
+  );
+  await pool.query(
+    `INSERT INTO email_otps (email, code, type, expiresAt) VALUES (?, ?, ?, ?)`,
+    [email.toLowerCase(), code, type, expiresAt]
+  );
+  return code;
+}
+
+export async function verifyOtp(
+  email: string,
+  code: string,
+  type: "login" | "signup"
+): Promise<{ valid: boolean; reason?: string }> {
+  const pool = getPool();
+  if (!pool) return { valid: false, reason: "DB unavailable" };
+  const [rows] = await pool.query(
+    `SELECT id, attempts, expiresAt FROM email_otps
+     WHERE email = ? AND type = ? AND usedAt IS NULL
+     ORDER BY id DESC LIMIT 1`,
+    [email.toLowerCase(), type]
+  );
+  const row = (rows as any[])[0];
+  if (!row) return { valid: false, reason: "No code found — please request a new one" };
+  if (new Date(row.expiresAt) < new Date()) {
+    return { valid: false, reason: "Code expired — please request a new one" };
+  }
+  if (row.attempts >= 3) {
+    return { valid: false, reason: "Too many attempts — please request a new code" };
+  }
+  if (row.code !== code) {
+    await pool.query(`UPDATE email_otps SET attempts = attempts + 1 WHERE id = ?`, [row.id]);
+    const left = 2 - row.attempts;
+    return { valid: false, reason: `Incorrect code — ${left} attempt${left === 1 ? "" : "s"} left` };
+  }
+  await pool.query(`UPDATE email_otps SET usedAt = NOW() WHERE id = ?`, [row.id]);
+  return { valid: true };
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {

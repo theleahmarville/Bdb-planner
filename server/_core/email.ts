@@ -65,6 +65,55 @@ function emailShell(accentColor: string, headerEmoji: string, headerTitle: strin
 </html>`;
 }
 
+export async function sendOtpEmail(to: string, code: string, type: "login" | "signup") {
+  if (!resend) {
+    console.warn("[Email] RESEND_API_KEY not set — OTP:", code);
+    return;
+  }
+  const subject = type === "signup"
+    ? "Your BDB verification code"
+    : "Your BDB sign-in code";
+  const action = type === "signup" ? "verify your email address" : "complete your sign-in";
+  await resend.emails.send({
+    from: FROM_ADDRESS,
+    to,
+    subject,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1.0" /></head>
+<body style="margin:0;padding:0;background:#faf8f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#faf8f5;padding:40px 20px;">
+    <tr><td align="center">
+      <table width="480" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+        <tr>
+          <td style="background:linear-gradient(135deg,#10b981,#059669);padding:32px 40px;text-align:center;">
+            <p style="margin:0;font-size:11px;color:rgba(255,255,255,0.8);letter-spacing:2px;text-transform:uppercase;font-weight:700;">Be · Do · Become</p>
+            <h1 style="margin:8px 0 0;font-size:24px;font-weight:900;color:#fff;">Verification Code</h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:40px;">
+            <p style="margin:0 0 24px;font-size:15px;color:#4a4a4a;line-height:1.6;">Use the code below to ${action}. It expires in <strong>10 minutes</strong>.</p>
+            <div style="background:#f0fdf4;border:2px solid #10b981;border-radius:12px;padding:24px;text-align:center;margin:0 0 24px;">
+              <p style="margin:0;font-size:42px;font-weight:900;letter-spacing:10px;color:#065f46;font-variant-numeric:tabular-nums;">${code}</p>
+            </div>
+            <p style="margin:0;font-size:13px;color:#9a9a9a;line-height:1.6;">If you didn't request this code, you can safely ignore this email. Someone may have typed your email address by mistake.</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 40px 32px;text-align:center;">
+            <p style="margin:0;font-size:12px;color:#b0a090;">BDB Digital Wellness Planner · by Leah Marville</p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`,
+  });
+}
+
 export async function sendWelcomeEmail(to: string, name: string) {
   if (!process.env.RESEND_API_KEY) {
     console.warn("[Email] RESEND_API_KEY not set — skipping welcome email");

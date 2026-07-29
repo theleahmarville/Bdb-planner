@@ -7,7 +7,7 @@ import { getSessionCookieOptions } from "./cookies";
 import { authService } from "./sdk";
 import { ENV } from "./env";
 import { google } from "googleapis";
-import { sendWelcomeEmail, sendPasswordResetEmail } from "./email";
+import { sendWelcomeEmail, sendPasswordResetEmail, sendOtpEmail } from "./email";
 import { SignJWT, jwtVerify, createRemoteJWKSet } from "jose";
 import { verifyOAuthState } from "./tokenEncryption";
 import { auditFromReq, recordLoginAttempt, isLockedOut } from "./auditLog";
@@ -273,17 +273,10 @@ export function registerAuthRoutes(app: Express) {
         return;
       }
 
-      const sessionToken = await authService.createSessionToken(
-        { id: user.id, openId: user.openId, name: user.name },
-        { expiresInMs: ONE_YEAR_MS }
-      );
-
-      const cookieOptions = getSessionCookieOptions(req);
-      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
-
-      auditFromReq(req, "register.success", "auth", "success", user.id, { method: "email" });
-      sendWelcomeEmail(user.email!, user.name || "").catch(() => {});
-      res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
+      auditFromReq(req, "register.otp_sent", "auth", "success", user.id, { method: "email" });
+      const code = await db.createOtp(email.toLowerCase(), "signup");
+      sendOtpEmail(email.toLowerCase(), code, "signup").catch(() => {});
+      res.json({ requiresOtp: true, email: email.toLowerCase() });
     } catch (error) {
       console.error("[Auth] Registration failed", error);
       res.status(500).json({ error: "Registration failed" });
@@ -502,21 +495,81 @@ export function registerAuthRoutes(app: Express) {
       }
 
       await recordLoginAttempt(String(email), ip, true);
-      await db.upsertUser({ openId: user.openId, lastSignedIn: new Date() });
+
+      // Credentials valid — send OTP for second factor
+      const code = await db.createOtp(String(email).toLowerCase(), "login");
+      sendOtpEmail(String(email).toLowerCase(), code, "login").catch(() => {});
+      auditFromReq(req, "login.otp_sent", "auth", "success", user.id, { method: "email" });
+      res.json({ requiresOtp: true, email: String(email).toLowerCase() });
+    } catch (error) {
+      console.error("[Auth] Login failed", error);
+      res.status(500).json({ error: "Login failed" });
+    }
+  });
+
+  // POST /api/auth/verify-otp — complete login or registration after OTP verification
+  app.post("/api/auth/verify-otp", async (req: Request, res: Response) => {
+    const { email, code, type } = req.body;
+    if (!email || !code || !type) {
+      res.status(400).json({ error: "Email, code, and type are required" });
+      return;
+    }
+    if (type !== "login" && type !== "signup") {
+      res.status(400).json({ error: "Invalid type" });
+      return;
+    }
+    try {
+      const result = await db.verifyOtp(String(email).toLowerCase(), String(code), type as "login" | "signup");
+      if (!result.valid) {
+        res.status(401).json({ error: result.reason ?? "Invalid code" });
+        return;
+      }
+
+      const user = await db.getUserByEmail(String(email).toLowerCase());
+      if (!user) {
+        res.status(404).json({ error: "Account not found" });
+        return;
+      }
+
+      if (type === "login") {
+        await db.upsertUser({ openId: user.openId, lastSignedIn: new Date() });
+      } else {
+        // Registration: send welcome email now that email is verified
+        sendWelcomeEmail(user.email!, user.name || "").catch(() => {});
+      }
 
       const sessionToken = await authService.createSessionToken(
         { id: user.id, openId: user.openId, name: user.name },
         { expiresInMs: ONE_YEAR_MS }
       );
-
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
-      auditFromReq(req, "login.success", "auth", "success", user.id, { method: "email" });
+      auditFromReq(req, `${type}.success`, "auth", "success", user.id, { method: "email_otp" });
       res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
     } catch (error) {
-      console.error("[Auth] Login failed", error);
-      res.status(500).json({ error: "Login failed" });
+      console.error("[Auth] verify-otp failed:", error);
+      res.status(500).json({ error: "Verification failed" });
+    }
+  });
+
+  // POST /api/auth/resend-otp — generate and send a fresh OTP
+  app.post("/api/auth/resend-otp", async (req: Request, res: Response) => {
+    const { email, type } = req.body;
+    if (!email || (type !== "login" && type !== "signup")) {
+      res.status(400).json({ error: "Invalid request" });
+      return;
+    }
+    // Only resend if the account exists
+    const user = await db.getUserByEmail(String(email).toLowerCase());
+    if (!user) { res.json({ success: true }); return; } // silent for security
+    try {
+      const code = await db.createOtp(String(email).toLowerCase(), type as "login" | "signup");
+      sendOtpEmail(String(email).toLowerCase(), code, type as "login" | "signup").catch(() => {});
+      res.json({ success: true });
+    } catch (error) {
+      console.error("[Auth] resend-otp failed:", error);
+      res.status(500).json({ error: "Failed to send code" });
     }
   });
 
