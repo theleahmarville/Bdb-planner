@@ -273,10 +273,15 @@ export function registerAuthRoutes(app: Express) {
         return;
       }
 
-      auditFromReq(req, "register.otp_sent", "auth", "success", user.id, { method: "email" });
-      const code = await db.createOtp(email.toLowerCase(), "signup");
-      sendOtpEmail(email.toLowerCase(), code, "signup").catch(() => {});
-      res.json({ requiresOtp: true, email: email.toLowerCase() });
+      const sessionToken = await authService.createSessionToken(
+        { id: user.id, openId: user.openId, name: user.name },
+        { expiresInMs: ONE_YEAR_MS }
+      );
+      const cookieOptions = getSessionCookieOptions(req);
+      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+      auditFromReq(req, "register.success", "auth", "success", user.id, { method: "email" });
+      sendWelcomeEmail(user.email!, user.name || "").catch(() => {});
+      res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
     } catch (error) {
       console.error("[Auth] Registration failed", error);
       res.status(500).json({ error: "Registration failed" });
@@ -495,12 +500,16 @@ export function registerAuthRoutes(app: Express) {
       }
 
       await recordLoginAttempt(String(email), ip, true);
+      await db.upsertUser({ openId: user.openId, lastSignedIn: new Date() });
 
-      // Credentials valid — send OTP for second factor
-      const code = await db.createOtp(String(email).toLowerCase(), "login");
-      sendOtpEmail(String(email).toLowerCase(), code, "login").catch(() => {});
-      auditFromReq(req, "login.otp_sent", "auth", "success", user.id, { method: "email" });
-      res.json({ requiresOtp: true, email: String(email).toLowerCase() });
+      const sessionToken = await authService.createSessionToken(
+        { id: user.id, openId: user.openId, name: user.name },
+        { expiresInMs: ONE_YEAR_MS }
+      );
+      const cookieOptions = getSessionCookieOptions(req);
+      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+      auditFromReq(req, "login.success", "auth", "success", user.id, { method: "email" });
+      res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
     } catch (error) {
       console.error("[Auth] Login failed", error);
       res.status(500).json({ error: "Login failed" });
