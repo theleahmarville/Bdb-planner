@@ -16,16 +16,12 @@ import { toast } from "sonner";
 import { getISOWeek, startOfISOWeek, format } from "date-fns";
 import { useLocation } from "wouter";
 import {
-  getLocalHistory,
-  addLocalMessage,
-  clearLocalHistory,
   getLocalMemories,
   upsertLocalMemory,
   deleteLocalMemory,
   formatMemoryContext,
   exportLocalData,
   importLocalData,
-  type LocalZionMessage,
   type LocalZionMemory,
 } from "@/lib/zionLocalStore";
 import { encryptJson, decryptJson, type EncryptedBundle } from "@/lib/zionCrypto";
@@ -454,32 +450,39 @@ export default function ZionPage() {
   const chunksRef = useRef<Blob[]>([]);
 
   const transcribeMutation = trpc.zion.transcribeVoice.useMutation();
+  const clearHistoryMutation = trpc.zion.clearHistory.useMutation();
   const [showMemory, setShowMemory] = useState(false);
   const [memories, setMemories] = useState<LocalZionMemory[]>([]);
   const [showBackup, setShowBackup] = useState(false);
 
-  // Load history from IndexedDB on mount
+  // Load history from server DB on mount
+  const { data: serverHistory, isLoading: historyQueryLoading } = trpc.zion.history.useQuery(undefined, {
+    enabled: !!userId && isAuthenticated,
+    staleTime: Infinity,
+  });
+
   useEffect(() => {
-    if (!userId) return;
-    getLocalHistory(userId).then(history => {
-      if (history.length > 0) {
-        setMessages(history.map(m => ({
-          id: m.id,
-          role: m.role,
+    if (historyQueryLoading) return;
+    if (serverHistory && serverHistory.length > 0) {
+      setMessages(serverHistory.map(m => {
+        let plannerActions: PlannerAction[] | undefined;
+        try {
+          const meta = m.metadata ? JSON.parse(m.metadata) : null;
+          plannerActions = meta?.plannerActions;
+        } catch { /* ignore */ }
+        return {
+          id: String(m.id),
+          role: m.role as "user" | "assistant",
           content: m.content,
-          plannerActions: m.plannerActions as PlannerAction[] | undefined,
-          isVoice: m.isVoice,
+          plannerActions,
           createdAt: new Date(m.createdAt),
-        })));
-      } else {
-        setMessages([WELCOME_MSG]);
-      }
-      setHistoryLoading(false);
-    }).catch(() => {
+        };
+      }));
+    } else {
       setMessages([WELCOME_MSG]);
-      setHistoryLoading(false);
-    });
-  }, [userId]);
+    }
+    setHistoryLoading(false);
+  }, [serverHistory, historyQueryLoading]);
 
   // Load memories when panel opens
   useEffect(() => {
@@ -513,16 +516,6 @@ export default function ZionPage() {
       isVoice,
       createdAt: new Date(),
     };
-
-    // Persist user message locally immediately
-    const localUserMsg: LocalZionMessage = {
-      id: userMsg.id,
-      role: "user",
-      content: userMsg.content,
-      isVoice: userMsg.isVoice,
-      createdAt: userMsg.createdAt.toISOString(),
-    };
-    await addLocalMessage(userId, localUserMsg).catch(() => {});
 
     setMessages(prev => [...prev, userMsg]);
 
@@ -593,14 +586,7 @@ export default function ZionPage() {
                 m.id === assistantMsgId ? { ...m, content: display, plannerActions: finalPlannerActions } : m
               ));
 
-              // Persist to IndexedDB
-              await addLocalMessage(userId, {
-                id: assistantMsgId,
-                role: "assistant",
-                content: display,
-                plannerActions: finalPlannerActions,
-                createdAt: new Date().toISOString(),
-              }).catch(() => {});
+              // Messages are now persisted server-side in the stream endpoint
 
               // Persist memory updates
               const memUpdates = Array.isArray(evt.memoryUpdates) ? evt.memoryUpdates as Array<{ category: LocalZionMemory["category"]; key: string; value: string }> : [];
@@ -636,9 +622,9 @@ export default function ZionPage() {
 
   const handleClearHistory = async () => {
     if (!userId) return;
-    if (!confirm("Clear all local conversation history with Zion? This cannot be undone.")) return;
+    if (!confirm("Clear all conversation history with Zion? This cannot be undone.")) return;
     try {
-      await clearLocalHistory(userId);
+      await clearHistoryMutation.mutateAsync();
       setMessages([{
         id: "welcome-new",
         role: "assistant",

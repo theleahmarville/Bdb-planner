@@ -977,13 +977,16 @@ Rules:
     };
   }),
 
-  history: protectedProcedure.query(async () => {
-    // Deprecated — conversation history now lives in client IndexedDB.
-    return [];
-  }),
+  history: protectedProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(500).optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const { getZionHistory } = await import('./db');
+      return getZionHistory(ctx.user.id, input?.limit ?? 100);
+    }),
 
-  clearHistory: protectedProcedure.mutation(async () => {
-    // Deprecated — history is cleared locally by the client.
+  clearHistory: protectedProcedure.mutation(async ({ ctx }) => {
+    const { clearZionHistory } = await import('./db');
+    await clearZionHistory(ctx.user.id);
     return { success: true };
   }),
 

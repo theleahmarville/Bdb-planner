@@ -16,7 +16,7 @@ import { createContext } from "./context";
 // vite.ts is only loaded dynamically in development so esbuild never
 // bundles vite / vite-plugins into the production output
 
-import { getDb, ensureSchema, getUserPlannerContext } from "../db";
+import { getDb, ensureSchema, getUserPlannerContext, saveZionMessage } from "../db";
 import { startScheduler } from "../scheduler";
 import { authService } from "./sdk";
 import { streamAnthropicLLM } from "./llm";
@@ -417,6 +417,11 @@ async function startServer() {
       }
 
       const memoryUpdates = await extractMemories(message, displayContent);
+
+      // Persist conversation to DB so history survives refresh / other devices
+      await saveZionMessage({ userId: user.id, role: "user", content: message.trim(), metadata: null }).catch(() => {});
+      await saveZionMessage({ userId: user.id, role: "assistant", content: displayContent, metadata: plannerActions.length ? JSON.stringify({ plannerActions }) : null }).catch(() => {});
+
       send({ done: true, displayContent, plannerActions, memoryUpdates });
     } catch (err: any) {
       console.error("[Zion stream]", err?.message ?? err);
