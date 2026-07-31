@@ -256,6 +256,23 @@ const dailyRouter = router({
       return getDailyEntry(ctx.user.id, input.date);
     }),
 
+  // Returns all 7 daily entries for a week, keyed by date (YYYY-MM-DD)
+  getWeek: protectedProcedure
+    .input(z.object({ weekStartDate: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const { getDailyEntry: getEntry } = await import('./db');
+      const base = new Date(input.weekStartDate + 'T12:00:00');
+      const results: Record<string, any> = {};
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(base);
+        d.setDate(base.getDate() + i);
+        const dateStr = d.toISOString().slice(0, 10);
+        const entry = await getEntry(ctx.user.id, dateStr);
+        if (entry) results[dateStr] = entry;
+      }
+      return results;
+    }),
+
   listYear: protectedProcedure
     .input(z.object({ year: z.number() }))
     .query(async ({ ctx, input }) => {
