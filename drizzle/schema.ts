@@ -23,6 +23,18 @@ export const users = mysqlTable("users", {
   bio: varchar("bio", { length: 280 }),
   timezone: varchar("timezone", { length: 64 }).default("UTC"),
   onboardingCompleted: boolean("onboardingCompleted").default(false).notNull(),
+  dateOfBirth: varchar("dateOfBirth", { length: 10 }),
+  appleId: varchar("appleId", { length: 255 }),
+  anonymizedAt: timestamp("anonymizedAt"),
+  // User preferences
+  emailNotificationsEnabled: boolean("emailNotificationsEnabled").default(true).notNull(),
+  devotionPopupEnabled: boolean("devotionPopupEnabled").default(true).notNull(),
+  // Stripe subscription
+  stripeCustomerId: varchar("stripeCustomerId", { length: 255 }),
+  stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 255 }),
+  subscriptionPlan: varchar("subscriptionPlan", { length: 50 }).default("free"),
+  subscriptionStatus: varchar("subscriptionStatus", { length: 50 }).default("active"),
+  subscriptionPeriodEnd: timestamp("subscriptionPeriodEnd"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -274,10 +286,21 @@ export const userIntegrations = mysqlTable("user_integrations", {
   googleRefreshToken: text("googleRefreshToken"),
   googleTokenExpiry: timestamp("googleTokenExpiry"),
   googleCalendarId: varchar("googleCalendarId", { length: 256 }),
-  gmailEnabled: int("gmailEnabled").default(0), // 1 = Gmail scope granted
+  gmailEnabled: int("gmailEnabled").default(0), // legacy: 1 = Gmail scope on calendar token
+  // Gmail (dedicated OAuth — separate from Calendar)
+  gmailAccessToken: text("gmailAccessToken"),
+  gmailRefreshToken: text("gmailRefreshToken"),
+  gmailTokenExpiry: timestamp("gmailTokenExpiry"),
   // Notion
   notionToken: text("notionToken"),
   notionDatabaseId: varchar("notionDatabaseId", { length: 128 }),
+  // Slack read access (bot token, separate from outbound webhook)
+  slackBotToken: text("slackBotToken"),
+  slackReadChannelIds: text("slackReadChannelIds"), // JSON array of channel IDs
+  // Box
+  boxAccessToken: text("boxAccessToken"),
+  // Granola
+  granolaApiKey: text("granolaApiKey"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

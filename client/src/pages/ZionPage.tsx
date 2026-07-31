@@ -4,17 +4,29 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Streamdown } from "streamdown";
 import {
   Sparkles, Mic, MicOff, Send, Trash2, CheckCircle2,
   Calendar, Target, BookOpen, Heart, BarChart2, Loader2,
   Volume2, ChevronDown, Bell, DollarSign, Share2, Smile,
-  ExternalLink, SaveAll, Mail, Briefcase, RefreshCw, X, Clock,
-  AlertCircle, ChevronUp,
+  ExternalLink, SaveAll, Brain, X as XIcon, Download, Upload, Lock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { getISOWeek, startOfISOWeek, format } from "date-fns";
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
+import {
+  exportLocalData,
+  importLocalData,
+} from "@/lib/zionLocalStore";
+import { encryptJson, decryptJson, type EncryptedBundle } from "@/lib/zionCrypto";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface PlannerAction {
@@ -186,6 +198,7 @@ function ActionCardsGroup({
     utils.bigGoals.invalidate();
     utils.annual.invalidate();
     utils.notes.invalidate();
+    utils.reminders.invalidate();
   };
 
   const saveMutation = trpc.zion.saveParsedItem.useMutation();
@@ -314,285 +327,163 @@ function MessageBubble({ msg }: { msg: Message }) {
   );
 }
 
-// ── Gmail Email Summary Panel ──────────────────────────────────────────────────
-function EmailSummaryPanel({
-  onClose,
-}: {
-  onClose: () => void;
-}) {
-  const { isAuthenticated } = useAuth();
-  const [result, setResult] = useState<{ summary: string; emailCount: number; emails: { from: string; subject: string; snippet: string }[] } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const { data: gmailStatus } = trpc.gmail.status.useQuery(undefined, { enabled: isAuthenticated });
-  const summaryMutation = trpc.gmail.summarizeToday.useMutation();
+// ── Backup export/import dialog ────────────────────────────────────────────────
+function BackupDialog({
+  open, onClose, userId,
+}: { open: boolean; onClose: () => void; userId: number }) {
+  const [mode, setMode] = useState<"idle" | "export" | "import">("idle");
+  const [passphrase, setPassphrase] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const fetchEmails = async () => {
-    setLoading(true);
-    setError("");
+  const handleExport = async () => {
+    if (!passphrase.trim()) { toast.error("Enter a passphrase to protect your backup"); return; }
+    setBusy(true);
     try {
-      const today = new Date().toISOString().slice(0, 10);
-      const data = await summaryMutation.mutateAsync({ date: today });
-      setResult(data as any);
-    } catch (e: any) {
-      setError(e?.message ?? "Could not fetch emails.");
+      const data = await exportLocalData(userId);
+      const bundle = await encryptJson(data, passphrase);
+      const blob = new Blob([JSON.stringify(bundle)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `zion-backup-${new Date().toISOString().slice(0, 10)}.bdbzion`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Encrypted backup downloaded — keep your passphrase safe!");
+      onClose();
+    } catch {
+      toast.error("Export failed. Please try again.");
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   };
 
-  useEffect(() => { fetchEmails(); }, []);
-
-  // Parse sender name from "Name <email>" format
-  const parseName = (from: string) => from.replace(/<[^>]+>/, "").trim() || from;
-
-  return (
-    <div className="mx-4 mb-2 rounded-2xl border border-[#e8e0d5] bg-white shadow-sm overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#f0ebe4] bg-gradient-to-r from-red-50 to-orange-50">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-full bg-red-100 flex items-center justify-center">
-            <Mail className="w-3.5 h-3.5 text-red-600" />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-[#1a1a1a]">Email Summary</p>
-            <p className="text-[10px] text-[#8a7a6a]">
-              {result ? `${result.emailCount} email${result.emailCount !== 1 ? "s" : ""} today` : "Today's inbox"}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={fetchEmails}
-            disabled={loading}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-[#8a7a6a] hover:bg-red-100 hover:text-red-600 transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-          </button>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-[#8a7a6a] hover:bg-[#f0ebe4] transition-colors"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      <div className="max-h-72 overflow-y-auto">
-        {loading && !result && (
-          <div className="flex items-center justify-center gap-2 py-8 text-[#8a7a6a]">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span className="text-sm">Fetching your emails…</span>
-          </div>
-        )}
-
-        {!gmailStatus?.gmailEnabled && !loading && (
-          <div className="p-4 flex items-start gap-3">
-            <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium text-[#3d3730]">Gmail not connected</p>
-              <p className="text-xs text-[#8a7a6a] mt-0.5">Go to <Link to="/integrations" className="text-emerald-600 underline">Integrations</Link> and re-authorize Google to enable Gmail access.</p>
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="p-4 flex items-start gap-3">
-            <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-            <p className="text-sm text-red-700">{error}</p>
-          </div>
-        )}
-
-        {result && (
-          <div className="p-4 space-y-3">
-            {result.emailCount === 0 ? (
-              <p className="text-sm text-[#8a7a6a] text-center py-2">📭 Inbox is clear today!</p>
-            ) : (
-              <>
-                {/* Individual email cards */}
-                <div className="space-y-1.5">
-                  {result.emails.slice(0, 6).map((email, i) => (
-                    <div key={i} className="flex items-start gap-2.5 p-2.5 rounded-xl bg-[#faf8f5] border border-[#ede8e0]">
-                      <div className="w-7 h-7 rounded-full bg-red-100 flex items-center justify-center shrink-0 text-[10px] font-bold text-red-600">
-                        {parseName(email.from).charAt(0).toUpperCase()}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-[#3d3730] truncate">{email.subject}</p>
-                        <p className="text-[10px] text-[#8a7a6a] truncate">{parseName(email.from)}</p>
-                        {email.snippet && (
-                          <p className="text-[10px] text-[#a09080] mt-0.5 line-clamp-1">{email.snippet}</p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  {result.emails.length > 6 && (
-                    <p className="text-[10px] text-center text-[#8a7a6a]">+{result.emails.length - 6} more emails</p>
-                  )}
-                </div>
-
-                {/* AI Summary */}
-                <div className="border-t border-[#f0ebe4] pt-3">
-                  <p className="text-[10px] font-semibold text-[#8a7a6a] uppercase tracking-wide mb-1.5 flex items-center gap-1">
-                    <Sparkles className="w-3 h-3 text-emerald-500" /> Zion's Summary
-                  </p>
-                  <div className="prose prose-sm max-w-none prose-p:my-1 text-[#3d3730] text-xs">
-                    <Streamdown>{result.summary}</Streamdown>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Chief of Staff Panel ───────────────────────────────────────────────────────
-function ChiefOfStaffPanel({ onClose }: { onClose: () => void }) {
-  const [briefing, setBriefing] = useState<{ briefing: string; dateLabel: string; hasEmails: boolean } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [includeEmails, setIncludeEmails] = useState(false);
-  const { data: gmailStatus, isAuthenticated } = trpc.gmail.status.useQuery(undefined) as any;
-  const chiefOfStaffMutation = trpc.zion.chiefOfStaff.useMutation();
-
-  const generate = async (withEmails = includeEmails) => {
-    setLoading(true);
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !passphrase.trim()) { toast.error("Enter your passphrase first, then select the file"); return; }
+    setBusy(true);
     try {
-      const today = new Date().toISOString().slice(0, 10);
-      const data = await chiefOfStaffMutation.mutateAsync({ date: today, includeEmails: withEmails });
-      setBriefing(data);
-    } catch (e: any) {
-      toast.error(e?.message ?? "Could not generate briefing.");
+      const text = await file.text();
+      const bundle = JSON.parse(text) as EncryptedBundle;
+      const data = await decryptJson(bundle, passphrase);
+      await importLocalData(userId, data as Parameters<typeof importLocalData>[1]);
+      toast.success("Backup restored! Reload the page to see your history.");
+      onClose();
+    } catch {
+      toast.error("Import failed — wrong passphrase or corrupted file.");
     } finally {
-      setLoading(false);
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
     }
   };
 
-  useEffect(() => { generate(false); }, []);
-
   return (
-    <div className="mx-4 mb-2 rounded-2xl border border-[#e8e0d5] bg-white shadow-sm overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#f0ebe4] bg-gradient-to-r from-violet-50 to-indigo-50">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-full bg-violet-100 flex items-center justify-center">
-            <Briefcase className="w-3.5 h-3.5 text-violet-600" />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-[#1a1a1a]">Chief of Staff</p>
-            <p className="text-[10px] text-[#8a7a6a]">{briefing?.dateLabel ?? "Daily briefing"}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          {/* Email toggle if Gmail connected */}
-          {gmailStatus?.gmailEnabled && (
-            <button
-              onClick={() => {
-                const next = !includeEmails;
-                setIncludeEmails(next);
-                generate(next);
-              }}
-              disabled={loading}
-              title={includeEmails ? "Emails included — click to exclude" : "Click to include emails"}
-              className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-full border transition-all ${
-                includeEmails
-                  ? "bg-red-50 border-red-200 text-red-600"
-                  : "bg-[#faf8f5] border-[#e8e0d5] text-[#8a7a6a]"
-              }`}
+    <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Lock className="w-4 h-4 text-violet-600" /> Encrypted Backup</DialogTitle>
+          <DialogDescription className="text-xs text-[#8a7a6a]">
+            Your Zion memory and history lives only on this device. Create an encrypted backup to restore it on another device. Your passphrase never leaves this browser.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 pt-1">
+          <Input
+            type="password"
+            placeholder="Backup passphrase"
+            value={passphrase}
+            onChange={e => setPassphrase(e.target.value)}
+            className="h-10"
+            autoComplete="new-password"
+          />
+          <div className="flex gap-2">
+            <Button
+              className="flex-1 gap-2 bg-violet-600 hover:bg-violet-700 text-white"
+              onClick={() => { setMode("export"); handleExport(); }}
+              disabled={busy || mode === "import"}
             >
-              <Mail className="w-3 h-3" />
-              {includeEmails ? "Emails on" : "+ Emails"}
-            </button>
-          )}
-          <button
-            onClick={() => generate(includeEmails)}
-            disabled={loading}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-[#8a7a6a] hover:bg-violet-100 hover:text-violet-600 transition-colors"
-            title="Regenerate"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-          </button>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 rounded-full flex items-center justify-center text-[#8a7a6a] hover:bg-[#f0ebe4] transition-colors"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
+              {busy && mode === "export" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              Export
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1 gap-2"
+              onClick={() => { setMode("import"); fileRef.current?.click(); }}
+              disabled={busy || mode === "export"}
+            >
+              {busy && mode === "import" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              Import
+            </Button>
+          </div>
+          <input ref={fileRef} type="file" accept=".bdbzion,application/json" className="hidden" onChange={handleImport} />
+          <p className="text-[10px] text-center text-[#b0a090]">AES-256-GCM · 200,000 PBKDF2 rounds · zero server access</p>
         </div>
-      </div>
-
-      <div className="max-h-[420px] overflow-y-auto">
-        {loading && (
-          <div className="flex flex-col items-center justify-center gap-3 py-10 text-[#8a7a6a]">
-            <div className="w-10 h-10 rounded-full bg-violet-100 flex items-center justify-center">
-              <Loader2 className="w-5 h-5 text-violet-600 animate-spin" />
-            </div>
-            <p className="text-sm">Preparing your briefing…</p>
-          </div>
-        )}
-
-        {!loading && briefing && (
-          <div className="p-4">
-            <div className="prose prose-sm max-w-none text-[#3d3730]
-              prose-h2:text-sm prose-h2:font-bold prose-h2:text-[#1a1a1a] prose-h2:mt-3 prose-h2:mb-1 prose-h2:first:mt-0
-              prose-ul:my-1 prose-li:my-0.5 prose-li:text-xs prose-p:text-xs prose-p:my-1">
-              <Streamdown>{briefing.briefing}</Streamdown>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
+
+const WELCOME_MSG: Message = {
+  id: "welcome",
+  role: "assistant",
+  content: `# Welcome! I'm Zion 🌟\n\nI'm your personal AI wellness assistant for the **Be Do Become** planner. I'm here to help you:\n\n- **Organize your thoughts** — brain dump anything and I'll sort it into your planner instantly\n- **Set reminders** — tell me what to remind you of and I'll add it to your calendar\n- **Plan your week** — share what's on your mind and I'll prioritize it\n- **Track habits & wins** — I'll add them directly to your weekly tracker\n- **Manage your budget** — mention expenses or savings goals and I'll log them\n- **Plan social content** — share post ideas and I'll add them to your content calendar\n\nJust type or **speak** anything on your mind. I'll extract every actionable item and show you **Save** buttons to add them to the right planner section instantly.\n\n> *Try: "I need to launch my course in April, remind me to follow up with my client on Friday at 3pm, I want to save $500 this month, and I've been skipping the gym..."*\n\n**What's on your mind today?** ✨`,
+  createdAt: new Date(),
+};
 
 // ── Main Zion Page ─────────────────────────────────────────────────────────────
 export default function ZionPage() {
-  const { isAuthenticated, loading: authLoading } = useAuth();
+  const { isAuthenticated, loading: authLoading, user } = useAuth();
+  const userId = (user as any)?.id as number | undefined;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [isFetchingEmails, setIsFetchingEmails] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  const { data: gmailStatus } = trpc.gmail.status.useQuery(undefined, { enabled: isAuthenticated, staleTime: 60_000 });
-  const emailSummaryMutation = trpc.gmail.summarizeToday.useMutation();
-  const [activePanel, setActivePanel] = useState<"emails" | "chiefofstaff" | null>(null);
+  const transcribeMutation = trpc.zion.transcribeVoice.useMutation();
+  const clearHistoryMutation = trpc.zion.clearHistory.useMutation();
+  const deleteMemoryMutation = trpc.zion.deleteMemory.useMutation();
+  const [showMemory, setShowMemory] = useState(false);
+  const [showBackup, setShowBackup] = useState(false);
 
-  const { data: historyData, isLoading: historyLoading } = trpc.zion.history.useQuery(undefined, {
-    enabled: isAuthenticated,
+  const { data: memories = [], refetch: refetchMemories } = trpc.zion.getMemories.useQuery(undefined, {
+    enabled: !!userId && isAuthenticated && showMemory,
+    staleTime: 30_000,
   });
 
-  const chatMutation = trpc.zion.chat.useMutation();
-  const clearMutation = trpc.zion.clearHistory.useMutation();
-  const transcribeMutation = trpc.zion.transcribeVoice.useMutation();
-  const utils = trpc.useUtils();
+  // Load history from server DB on mount
+  const { data: serverHistory, isLoading: historyQueryLoading } = trpc.zion.history.useQuery(undefined, {
+    enabled: !!userId && isAuthenticated,
+    staleTime: Infinity,
+  });
 
   useEffect(() => {
-    if (historyData && historyData.length > 0) {
-      setMessages(historyData.map(m => ({
-        id: String(m.id),
-        role: m.role as "user" | "assistant",
-        content: m.content,
-        plannerActions: m.metadata ? (() => { try { return JSON.parse(m.metadata!).plannerActions; } catch { return undefined; } })() : undefined,
-        isVoice: m.metadata ? (() => { try { return JSON.parse(m.metadata!).isVoice; } catch { return false; } })() : false,
-        createdAt: new Date(m.createdAt),
-      })));
-    } else if (historyData && historyData.length === 0) {
-      setMessages([{
-        id: "welcome",
-        role: "assistant",
-        content: `# Welcome! I'm Zion 🌟\n\nI'm your personal AI wellness assistant for the **Be Do Become** planner. I'm here to help you:\n\n- **Organize your thoughts** — brain dump anything and I'll sort it into your planner instantly\n- **Set reminders** — tell me what to remind you of and I'll add it to your calendar\n- **Plan your week** — share what's on your mind and I'll prioritize it\n- **Track habits & wins** — I'll add them directly to your weekly tracker\n- **Manage your budget** — mention expenses or savings goals and I'll log them\n- **Plan social content** — share post ideas and I'll add them to your content calendar\n\nJust type or **speak** anything on your mind. I'll extract every actionable item and show you **Save** buttons to add them to the right planner section instantly.\n\n> *Try: "I need to launch my course in April, remind me to follow up with my client on Friday at 3pm, I want to save $500 this month, and I've been skipping the gym..."*\n\n**What's on your mind today?** ✨`,
-        createdAt: new Date(),
-      }]);
+    if (historyQueryLoading) return;
+    if (serverHistory && serverHistory.length > 0) {
+      setMessages(serverHistory.map(m => {
+        let plannerActions: PlannerAction[] | undefined;
+        try {
+          const meta = m.metadata ? JSON.parse(m.metadata) : null;
+          plannerActions = meta?.plannerActions;
+        } catch { /* ignore */ }
+        return {
+          id: String(m.id),
+          role: m.role as "user" | "assistant",
+          content: m.content,
+          plannerActions,
+          createdAt: new Date(m.createdAt),
+        };
+      }));
+    } else {
+      setMessages([WELCOME_MSG]);
     }
-  }, [historyData]);
+    setHistoryLoading(false);
+  }, [serverHistory, historyQueryLoading]);
+
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -609,7 +500,7 @@ export default function ZionPage() {
   };
 
   const sendMessage = async (text: string, isVoice = false) => {
-    if (!text.trim() || isSending) return;
+    if (!text.trim() || isSending || !userId) return;
     setIsSending(true);
     setInput("");
 
@@ -620,22 +511,88 @@ export default function ZionPage() {
       isVoice,
       createdAt: new Date(),
     };
+
     setMessages(prev => [...prev, userMsg]);
 
+    const assistantMsgId = `assistant-${Date.now()}`;
+    // Optimistically add an empty assistant message that will fill as tokens arrive
+    const streamingMsg: Message = {
+      id: assistantMsgId,
+      role: "assistant",
+      content: "",
+      createdAt: new Date(),
+    };
+    setMessages(prev => [...prev, streamingMsg]);
+
     try {
-      const result = await chatMutation.mutateAsync({ message: text.trim(), isVoice });
-      const assistantMsg: Message = {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        content: result.content,
-        plannerActions: result.plannerActions,
-        createdAt: new Date(),
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-      utils.zion.history.invalidate();
+      const recentHistory = messages
+        .filter(m => m.id !== "welcome")
+        .slice(-16)
+        .map(m => ({ role: m.role, content: m.content }));
+
+      const response = await fetch("/api/zion/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ message: text.trim(), isVoice, history: recentHistory }),
+      });
+
+      if (!response.ok || !response.body) {
+        throw new Error(`Stream failed: ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let accumulated = "";
+      let finalPlannerActions: PlannerAction[] | undefined;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split("\n\n");
+        buf = parts.pop() ?? "";
+
+        for (const part of parts) {
+          if (!part.startsWith("data: ")) continue;
+          try {
+            const evt = JSON.parse(part.slice(6)) as Record<string, unknown>;
+
+            if (typeof evt.token === "string") {
+              accumulated += evt.token;
+              // Trim the PLANNER_ACTIONS block from display in real time
+              const displayIdx = accumulated.indexOf("<PLANNER_ACTIONS>");
+              const displayContent = displayIdx >= 0 ? accumulated.slice(0, displayIdx).trim() : accumulated;
+              setMessages(prev => prev.map(m =>
+                m.id === assistantMsgId ? { ...m, content: displayContent } : m
+              ));
+            } else if (evt.done) {
+              const display = typeof evt.displayContent === "string" ? evt.displayContent : accumulated;
+              const actions = Array.isArray(evt.plannerActions) ? (evt.plannerActions as PlannerAction[]) : [];
+              finalPlannerActions = actions.length > 0 ? actions : undefined;
+
+              // Final update with clean content + planner actions
+              setMessages(prev => prev.map(m =>
+                m.id === assistantMsgId ? { ...m, content: display, plannerActions: finalPlannerActions } : m
+              ));
+
+              // Messages and memories are now persisted server-side in the stream endpoint
+            } else if (evt.error) {
+              throw new Error(String(evt.error));
+            }
+          } catch (parseErr) {
+            if ((parseErr as Error).message?.includes("Stream failed") || (parseErr as Error).message?.includes("unavailable")) {
+              throw parseErr;
+            }
+            // ignore malformed SSE frames
+          }
+        }
+      }
     } catch {
       toast.error("Zion couldn't respond right now. Please try again.");
-      setMessages(prev => prev.filter(m => m.id !== userMsg.id));
+      setMessages(prev => prev.filter(m => m.id !== userMsg.id && m.id !== assistantMsgId));
     } finally {
       setIsSending(false);
       setTimeout(() => textareaRef.current?.focus(), 100);
@@ -649,64 +606,25 @@ export default function ZionPage() {
     }
   };
 
-  // ── Email summary (direct action, doesn't go through chat mutation) ──────────
-  const handleEmailSummary = async () => {
-    if (isFetchingEmails || isSending) return;
-
-    const today = new Date().toISOString().slice(0, 10);
-
-    // Add user-side message instantly
-    const userMsg: Message = {
-      id: `user-emails-${Date.now()}`,
-      role: "user",
-      content: "📧 Summarise my emails from today",
-      createdAt: new Date(),
-    };
-    setMessages(prev => [...prev, userMsg]);
-    setIsFetchingEmails(true);
-
-    try {
-      const result = await emailSummaryMutation.mutateAsync({ date: today });
-      const assistantMsg: Message = {
-        id: `assistant-emails-${Date.now()}`,
-        role: "assistant",
-        content: result.emailCount === 0
-          ? result.summary
-          : `📬 **${result.emailCount} email${result.emailCount > 1 ? "s" : ""} today**\n\n${result.summary}`,
-        createdAt: new Date(),
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-    } catch (err: any) {
-      const msg = err?.message ?? "Could not fetch emails. Please try again.";
-      const needsAuth = msg.includes("Re-authorize") || msg.includes("not yet granted");
-      const assistantMsg: Message = {
-        id: `assistant-emails-err-${Date.now()}`,
-        role: "assistant",
-        content: needsAuth
-          ? `🔐 **Gmail access needed**\n\nI don't have permission to read your emails yet. Head to **Integrations** and click **Re-authorize** under the Gmail section — it only takes a second.\n\n[Open Integrations →](/integrations)`
-          : `⚠️ ${msg}`,
-        createdAt: new Date(),
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-    } finally {
-      setIsFetchingEmails(false);
-    }
-  };
-
   const handleClearHistory = async () => {
+    if (!userId) return;
     if (!confirm("Clear all conversation history with Zion? This cannot be undone.")) return;
     try {
-      await clearMutation.mutateAsync();
+      await clearHistoryMutation.mutateAsync();
       setMessages([{
         id: "welcome-new",
         role: "assistant",
         content: "Fresh start! ✨ I'm here whenever you're ready. What's on your mind?",
         createdAt: new Date(),
       }]);
-      utils.zion.history.invalidate();
     } catch {
       toast.error("Failed to clear history. Please try again.");
     }
+  };
+
+  const handleDeleteMemory = async (keyName: string) => {
+    await deleteMemoryMutation.mutateAsync({ keyName }).catch(() => {});
+    refetchMemories();
   };
 
   const startRecording = async () => {
@@ -759,6 +677,7 @@ export default function ZionPage() {
 
   return (
     <div className="flex-1 flex flex-col bg-[#faf8f5] min-h-0 relative">
+      {userId && <BackupDialog open={showBackup} onClose={() => setShowBackup(false)} userId={userId} />}
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-[#e8e0d5] bg-white/80 backdrop-blur-sm shrink-0">
         <div className="flex items-center gap-3">
@@ -771,9 +690,18 @@ export default function ZionPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200 hidden sm:flex">
-            <Sparkles className="w-2.5 h-2.5 mr-1" /> Fully Actionable
+          <Badge variant="outline" className="text-[10px] bg-violet-50 text-violet-700 border-violet-200 hidden sm:flex" title="Conversation stored only on your device">
+            <Lock className="w-2.5 h-2.5 mr-1" /> On-Device Only
           </Badge>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowBackup(true)}
+            className="text-[#8a7a6a] hover:text-violet-600 h-8 w-8 p-0"
+            title="Encrypted backup"
+          >
+            <Download className="w-4 h-4" />
+          </Button>
           <Button
             variant="ghost"
             size="sm"
@@ -802,7 +730,6 @@ export default function ZionPage() {
             <button
               key={c.label}
               onClick={() => {
-                setActivePanel(null);
                 setInput(c.prompt);
                 setTimeout(() => textareaRef.current?.focus(), 50);
               }}
@@ -811,50 +738,69 @@ export default function ZionPage() {
               {c.icon}{c.label}
             </button>
           ))}
-
-          {/* Email summary panel toggle */}
+          {/* Memory chip */}
           <button
-            onClick={() => setActivePanel(p => p === "emails" ? null : "emails")}
-            title="Today's email summary"
-            className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border transition-all cursor-pointer select-none active:scale-95 ${
-              activePanel === "emails"
-                ? "bg-red-100 border-red-300 text-red-700"
-                : "bg-red-50 border-red-200 text-red-600 hover:bg-red-100 hover:border-red-300"
-            }`}
-          >
-            <Mail className="w-3 h-3" />
-            Emails
-            {activePanel === "emails" ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
-          </button>
-
-          {/* Chief of Staff panel toggle */}
-          <button
-            onClick={() => setActivePanel(p => p === "chiefofstaff" ? null : "chiefofstaff")}
-            title="Daily briefing from your Chief of Staff"
-            className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border transition-all cursor-pointer select-none active:scale-95 ${
-              activePanel === "chiefofstaff"
+            onClick={() => setShowMemory(v => !v)}
+            className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border transition-all cursor-pointer select-none ${
+              showMemory
                 ? "bg-violet-100 border-violet-300 text-violet-700"
-                : "bg-violet-50 border-violet-200 text-violet-600 hover:bg-violet-100 hover:border-violet-300"
+                : "bg-white border-[#e8e0d5] text-[#8a7a6a] hover:bg-violet-50 hover:border-violet-200 hover:text-violet-600"
             }`}
           >
-            <Briefcase className="w-3 h-3" />
-            Briefing
-            {activePanel === "chiefofstaff" ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
+            <Brain className="w-3 h-3" />Memory
           </button>
         </div>
       </div>
 
-      {/* Active panel */}
-      {activePanel === "emails" && (
-        <div className="shrink-0">
-          <EmailSummaryPanel onClose={() => setActivePanel(null)} />
+      {/* Memory panel */}
+      {showMemory && (
+        <div className="mx-4 mb-2 rounded-2xl border border-violet-200 bg-violet-50/60 overflow-hidden shrink-0">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-violet-200">
+            <div className="flex items-center gap-2">
+              <Brain className="w-3.5 h-3.5 text-violet-600" />
+              <p className="text-xs font-bold text-violet-800">What Zion Remembers About You</p>
+            </div>
+            <button onClick={() => setShowMemory(false)} className="text-violet-400 hover:text-violet-700">
+              <XIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="max-h-48 overflow-y-auto p-2 space-y-1.5">
+            {memories.length === 0 ? (
+              <p className="text-[11px] text-center text-violet-400 py-3">
+                No memories yet — Zion learns from your conversations over time.
+              </p>
+            ) : (
+              memories.map(m => (
+                <div key={(m as any).key_name} className="flex items-start gap-2 group">
+                  <div className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 mt-0.5 ${
+                    m.category === "preference" ? "bg-emerald-100 text-emerald-700" :
+                    m.category === "pattern"    ? "bg-blue-100 text-blue-700" :
+                    m.category === "insight"    ? "bg-amber-100 text-amber-700" :
+                    "bg-gray-100 text-gray-600"
+                  }`}>{m.category}</div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] text-violet-900 leading-relaxed">{m.value}</p>
+                    <p className="text-[9px] text-violet-400">{(m as any).key_name}</p>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteMemory((m as any).key_name)}
+                    className="opacity-0 group-hover:opacity-100 text-violet-300 hover:text-red-500 transition-all shrink-0 mt-0.5"
+                    title="Forget this"
+                  >
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="px-3 py-1.5 border-t border-violet-200 bg-violet-100/50">
+            <p className="text-[9px] text-violet-400 text-center flex items-center justify-center gap-1">
+              <Lock className="w-2.5 h-2.5" /> Encrypted · stored securely on our servers · private to you
+            </p>
+          </div>
         </div>
       )}
-      {activePanel === "chiefofstaff" && (
-        <div className="shrink-0">
-          <ChiefOfStaffPanel onClose={() => setActivePanel(null)} />
-        </div>
-      )}
+
 
       {/* Messages */}
       <div
@@ -871,7 +817,8 @@ export default function ZionPage() {
           messages.map(msg => <MessageBubble key={msg.id} msg={msg} />)
         )}
 
-        {isSending && (
+        {/* Streaming: show dots only while waiting for the very first token */}
+        {isSending && messages[messages.length - 1]?.role !== "assistant" && (
           <div className="flex gap-3 mb-4">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shrink-0 mt-1 shadow-sm">
               <Sparkles className="w-4 h-4 text-white" />

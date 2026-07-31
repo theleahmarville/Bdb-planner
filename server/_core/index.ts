@@ -16,7 +16,20 @@ import { createContext } from "./context";
 // vite.ts is only loaded dynamically in development so esbuild never
 // bundles vite / vite-plugins into the production output
 
-import { getDb, ensureSchema } from "../db";
+import { getDb, ensureSchema, getUserPlannerContext, saveZionMessage, getZionMemory, upsertZionMemory } from "../db";
+import { startScheduler } from "../scheduler";
+import { authService } from "./sdk";
+import { streamAnthropicLLM } from "./llm";
+import { buildZionSystemPrompt } from "../zionPrompt";
+import { extractMemories } from "../routers";
+import {
+  requestIdMiddleware,
+  cspMiddleware,
+  securityHeadersMiddleware,
+  noCacheApiMiddleware,
+  httpsEnforcement,
+  contentTypeMiddleware,
+} from "./security";
 import webpush from "web-push";
 import { LOCAL_UPLOADS_DIR } from "../storage";
 
@@ -120,14 +133,33 @@ async function startServer() {
   // Hide Express fingerprint
   app.disable("x-powered-by");
 
-  // HTTP security headers (helmet) — before CORS
+  // ── Security middleware stack (order matters) ─────────────────────────────
+  app.use(requestIdMiddleware);        // Attach unique request ID for audit trail correlation
+  app.use(httpsEnforcement);           // Redirect HTTP → HTTPS in production
+  app.use(noCacheApiMiddleware);       // Prevent caching of sensitive API responses
+
+  // Helmet HTTP security headers
   app.use(helmet({
-    contentSecurityPolicy: false, // Disable CSP for now — Vite dev mode needs it off
-    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: false,       // We apply CSP ourselves below (more control)
+    crossOriginEmbedderPolicy: false,   // Allow OAuth popups
+    hsts: {
+      maxAge: 31536000,                 // 1 year HSTS (SOC 2 CC6.7)
+      includeSubDomains: true,
+      preload: true,
+    },
   }));
 
+  app.use(cspMiddleware);              // Content Security Policy (OWASP A05)
+  app.use(securityHeadersMiddleware);  // Permissions-Policy, CORP, COOP
+  app.use(contentTypeMiddleware);      // Reject unexpected Content-Types
+
   // CORS — allow requests from the configured frontend origin
-  app.use(cors({ origin: process.env.CORS_ORIGIN || true, credentials: true }));
+  app.use(cors({
+    origin: process.env.CORS_ORIGIN || (process.env.NODE_ENV === "production" ? false : true),
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
+  }));
   // Bypass localtunnel interstitial page
   app.use((_req, res, next) => {
     res.setHeader("bypass-tunnel-reminder", "true");
@@ -140,6 +172,18 @@ async function startServer() {
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     next();
+  });
+
+  // Raw body for Stripe webhook signature verification (must be before JSON parsers)
+  app.use((req, _res, next) => {
+    if (req.path === "/api/stripe/webhook") {
+      let data = "";
+      req.setEncoding("utf8");
+      req.on("data", chunk => { data += chunk; });
+      req.on("end", () => { (req as any).body = data; next(); });
+    } else {
+      next();
+    }
   });
 
   // Strict size limit for regular API requests (before 50mb parsers below)
@@ -203,8 +247,200 @@ async function startServer() {
   // Serve local uploads (fallback when S3 is not configured)
   app.use("/uploads", express.static(LOCAL_UPLOADS_DIR));
 
+  // ─── Universal Links / App Links — required for Sign in with Apple deep links ─
+  // Served now so the association files are already indexed by the time the
+  // native app ships; harmless no-op until APPLE_TEAM_ID/APPLE_BUNDLE_ID are set.
+  app.get("/.well-known/apple-app-site-association", (_req, res) => {
+    const teamId = process.env.APPLE_TEAM_ID || "TEAMID";
+    const bundleId = process.env.APPLE_BUNDLE_ID || "com.bedobecome.planner";
+    res.setHeader("Content-Type", "application/json");
+    res.json({
+      applinks: {
+        apps: [],
+        details: [{ appID: `${teamId}.${bundleId}`, paths: ["/reset-password*", "/invite/*"] }],
+      },
+    });
+  });
+  app.get("/.well-known/assetlinks.json", (_req, res) => {
+    const sha256Fingerprints = process.env.ANDROID_SHA256_FINGERPRINTS
+      ? process.env.ANDROID_SHA256_FINGERPRINTS.split(",")
+      : [];
+    res.setHeader("Content-Type", "application/json");
+    res.json([
+      {
+        relation: ["delegate_permission/common.handle_all_urls"],
+        target: {
+          namespace: "android_app",
+          package_name: process.env.ANDROID_PACKAGE_NAME || "com.bedobecome.planner",
+          sha256_cert_fingerprints: sha256Fingerprints,
+        },
+      },
+    ]);
+  });
+
   // Email/password auth routes
   registerAuthRoutes(app);
+
+  // ── Stripe webhook (raw body required — must be before express.json middleware) ──
+  app.post("/api/stripe/webhook", async (req, res) => {
+    const sig = req.headers["stripe-signature"] as string;
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    const { getStripe } = await import("./stripe");
+    const stripe = getStripe();
+    if (!stripe || !webhookSecret) { res.json({ received: true }); return; }
+
+    let event: import("stripe").Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err: any) {
+      console.error("[Stripe] Webhook signature failed:", err.message);
+      res.status(400).send(`Webhook Error: ${err.message}`);
+      return;
+    }
+
+    const { upsertUser, getUserByEmail } = await import("../db");
+
+    const getCustomerEmail = async (customerId: string) => {
+      const customer = await stripe.customers.retrieve(customerId) as import("stripe").Stripe.Customer;
+      return customer.email ?? null;
+    };
+
+    try {
+      switch (event.type) {
+        case "customer.subscription.created":
+        case "customer.subscription.updated": {
+          const sub = event.data.object as import("stripe").Stripe.Subscription;
+          const email = await getCustomerEmail(sub.customer as string);
+          if (!email) break;
+          const user = await getUserByEmail(email);
+          if (!user) break;
+          const priceId = sub.items.data[0]?.price.id;
+          const { PLANS } = await import("./stripe");
+          const plan = Object.values(PLANS).find(p => p.priceId === priceId)?.id ?? "pro";
+          await upsertUser({
+            openId: user.openId,
+            stripeSubscriptionId: sub.id,
+            subscriptionPlan: plan,
+            subscriptionStatus: sub.status,
+            subscriptionPeriodEnd: new Date((sub as any).current_period_end * 1000),
+          } as any);
+          break;
+        }
+        case "customer.subscription.deleted": {
+          const sub = event.data.object as import("stripe").Stripe.Subscription;
+          const email = await getCustomerEmail(sub.customer as string);
+          if (!email) break;
+          const user = await getUserByEmail(email);
+          if (!user) break;
+          await upsertUser({
+            openId: user.openId,
+            subscriptionPlan: "free",
+            subscriptionStatus: "canceled",
+            stripeSubscriptionId: null,
+          } as any);
+          break;
+        }
+        case "invoice.payment_failed": {
+          const inv = event.data.object as import("stripe").Stripe.Invoice;
+          const email = await getCustomerEmail(inv.customer as string);
+          if (!email) break;
+          const user = await getUserByEmail(email);
+          if (!user) break;
+          await upsertUser({ openId: user.openId, subscriptionStatus: "past_due" } as any);
+          break;
+        }
+      }
+    } catch (err) {
+      console.error("[Stripe] Webhook handler error:", err);
+    }
+
+    res.json({ received: true });
+  });
+
+  // ── Zion streaming chat (SSE) ─────────────────────────────────────────────────
+  // Tokens stream to the client as they arrive from Anthropic, giving instant
+  // feedback instead of a 3-8 second blank wait. Auth uses the same cookie as
+  // tRPC; memory never touches the server DB (client sends context, receives updates).
+  app.post("/api/zion/stream", async (req, res) => {
+    let user: Awaited<ReturnType<typeof authService.authenticateRequest>>;
+    try {
+      user = await authService.authenticateRequest(req);
+    } catch {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const { message, history = [] } = req.body ?? {};
+    if (typeof message !== "string" || !message.trim()) {
+      res.status(400).json({ error: "message is required" });
+      return;
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const send = (payload: Record<string, unknown>) => {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    try {
+      const context = await getUserPlannerContext(user.id);
+      // Load memories from DB — server is source of truth, client no longer sends them
+      const memRows = await getZionMemory(user.id).catch(() => [] as any[]);
+      const memoryContext = memRows.length
+        ? memRows.map((m: any) => `[${m.category}] ${m.key_name}: ${m.value}`).join("\n")
+        : "";
+      const systemPrompt = buildZionSystemPrompt(context, memoryContext);
+
+      const msgs: Array<{ role: "user" | "assistant"; content: string }> = [
+        ...(Array.isArray(history) ? history : []).map((m: any) => ({
+          role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
+          content: String(m.content ?? ""),
+        })),
+        { role: "user", content: message.trim() },
+      ];
+
+      let accumulated = "";
+
+      for await (const chunk of streamAnthropicLLM({ system: systemPrompt, messages: msgs })) {
+        accumulated += chunk;
+        send({ token: chunk });
+      }
+
+      // Parse PLANNER_ACTIONS from full accumulated content
+      let plannerActions: Array<Record<string, unknown>> = [];
+      let displayContent = accumulated;
+      const actionsMatch = accumulated.match(/<PLANNER_ACTIONS>([\s\S]*?)<\/PLANNER_ACTIONS>/);
+      if (actionsMatch) {
+        try {
+          const parsed = JSON.parse(actionsMatch[1].trim());
+          plannerActions = parsed.actions ?? [];
+        } catch { /* ignore malformed JSON */ }
+        displayContent = accumulated.replace(/<PLANNER_ACTIONS>[\s\S]*?<\/PLANNER_ACTIONS>/, "").trim();
+      }
+
+      const memoryUpdates = await extractMemories(message, displayContent);
+
+      // Persist conversation to DB
+      await saveZionMessage({ userId: user.id, role: "user", content: message.trim(), metadata: null }).catch(() => {});
+      await saveZionMessage({ userId: user.id, role: "assistant", content: displayContent, metadata: plannerActions.length ? JSON.stringify({ plannerActions }) : null }).catch(() => {});
+
+      // Persist memory updates to DB — no longer sent to client for IndexedDB
+      for (const mem of memoryUpdates) {
+        await upsertZionMemory(user.id, mem.category, mem.key, mem.value).catch(() => {});
+      }
+
+      send({ done: true, displayContent, plannerActions });
+    } catch (err: any) {
+      console.error("[Zion stream]", err?.message ?? err);
+      send({ error: "Zion is unavailable right now. Please try again." });
+    } finally {
+      res.end();
+    }
+  });
+
   // File upload routes (images + PDFs)
   app.use("/api/upload", uploadRouter);
   // tRPC API
@@ -225,10 +461,25 @@ async function startServer() {
     serveStatic(app);
   }
 
+  // ─── Global error handler — never leak stack traces / internals in production ─
+  // OWASP A05, ISO 27001 A.14.2.1. Must be registered last, after all routes.
+  app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const requestId = (req as any).__requestId;
+    console.error(`[Error] ${requestId ?? ""}`, err);
+    if (res.headersSent) return;
+    const isProd = process.env.NODE_ENV === "production";
+    res.status(err?.status || err?.statusCode || 500).json({
+      error: isProd ? "Something went wrong. Please try again." : String(err?.message || err),
+      requestId,
+    });
+  });
+
   const port = parseInt(process.env.PORT || "3000");
 
   server.listen(port, "0.0.0.0", () => {
     console.log(`Server running on http://0.0.0.0:${port}/`);
+    // Start Zion's autonomous scheduler after server is listening
+    startScheduler();
   });
 }
 

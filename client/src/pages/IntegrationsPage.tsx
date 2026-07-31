@@ -31,19 +31,32 @@ export default function IntegrationsPage() {
   const { data: gmailStatus, refetch: refetchGmail } = trpc.gmail.status.useQuery(undefined, {
     enabled: isAuthenticated,
   });
+  const { data: gmailDiag, refetch: refetchGmailDiag } = trpc.gmail.diagnose.useQuery(undefined, {
+    enabled: isAuthenticated,
+    staleTime: 30_000,
+  });
   const getAuthUrlMutation = trpc.googleCalendar.getAuthUrl.useMutation();
+  const getGmailAuthUrlMutation = trpc.gmail.getGmailAuthUrl.useMutation();
+  const testGmailMutation = trpc.gmail.testConnection.useMutation();
   const disconnectGoogleMutation = trpc.googleCalendar.disconnect.useMutation();
   const [gcalConnecting, setGcalConnecting] = useState(false);
   const [gcalDisconnecting, setGcalDisconnecting] = useState(false);
+  const [gmailConnecting, setGmailConnecting] = useState(false);
+  const [gmailTesting, setGmailTesting] = useState(false);
+  const [gmailTestResult, setGmailTestResult] = useState<{ from: string; subject: string }[] | null>(null);
+  const [showGmailDiag, setShowGmailDiag] = useState(false);
 
   // Slack
-  const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
+  const [slackBotToken, setSlackBotToken] = useState("");
   const [slackChannelName, setSlackChannelName] = useState("");
   const [slackSaving, setSlackSaving] = useState(false);
-  const testWebhookMutation = trpc.slack.testWebhook.useMutation();
-  const sendDailySummaryMutation = trpc.slack.sendDailySummary.useMutation();
   const [slackTesting, setSlackTesting] = useState(false);
   const [slackSending, setSlackSending] = useState(false);
+  const testWebhookMutation = trpc.slack.testWebhook.useMutation();
+  const sendDailySummaryMutation = trpc.slack.sendDailySummary.useMutation();
+  // Box
+  const [boxAccessToken, setBoxAccessToken] = useState("");
+  const [boxSaving, setBoxSaving] = useState(false);
 
   // Notion (legacy)
   const { data: annualData, refetch: refetchAnnual } = trpc.annual.get.useQuery({ year: YEAR }, { enabled: isAuthenticated });
@@ -53,15 +66,12 @@ export default function IntegrationsPage() {
   const [notionDbId, setNotionDbId] = useState("");
   const [notionSaving, setNotionSaving] = useState(false);
 
-  // Populate Slack fields from DB
+  // Populate Slack + Box fields from DB
   useEffect(() => {
     if (integrations) {
-      if (integrations.slackWebhookUrl && !slackWebhookUrl) {
-        setSlackWebhookUrl(integrations.slackWebhookUrl);
-      }
-      if (integrations.slackChannelName && !slackChannelName) {
-        setSlackChannelName(integrations.slackChannelName);
-      }
+      if ((integrations as any).slackBotToken && !slackBotToken) setSlackBotToken((integrations as any).slackBotToken);
+      if ((integrations as any).slackChannelName && !slackChannelName) setSlackChannelName((integrations as any).slackChannelName);
+      if ((integrations as any).boxAccessToken && !boxAccessToken) setBoxAccessToken((integrations as any).boxAccessToken);
     }
   }, [integrations]);
 
@@ -82,18 +92,25 @@ export default function IntegrationsPage() {
       window.history.replaceState({}, "", "/integrations");
     }
     if (connectedParam === "google_gmail") {
-      toast.success("Google Calendar + Gmail connected! Zion can now summarise your emails.");
+      toast.success("Google Calendar + Gmail connected! Zion can now read your inbox.");
       refetchGcal();
       refetchGmail();
+      window.history.replaceState({}, "", "/integrations");
+    }
+    if (connectedParam === "gmail") {
+      toast.success("Gmail connected! Chief of Staff will now include your inbox.");
+      refetchGmail();
+      refetchGmailDiag();
       window.history.replaceState({}, "", "/integrations");
     }
     if (errorParam) {
       const messages: Record<string, string> = {
         google_not_configured: "Google OAuth credentials not configured on server.",
-        google_auth_failed: "Google authentication failed. Please try again.",
-        google_no_code: "Google returned no authorization code.",
+        google_auth_failed: "Google authorization failed. Check that the Gmail API is enabled in Google Cloud Console and that gmail.readonly scope is added to your OAuth consent screen.",
+        google_no_code: "Google returned no authorization code — you may have denied access.",
+        google_access_denied: "Access denied. You may have clicked 'Back to safety'. Click Connect Gmail again and choose Advanced → Go to the app to proceed.",
       };
-      toast.error(messages[errorParam] ?? "Connection failed.");
+      toast.error(messages[errorParam] ?? `Connection failed (${errorParam}).`, { duration: 8000 });
       window.history.replaceState({}, "", "/integrations");
     }
   }, [connectedParam, errorParam]);
@@ -125,11 +142,39 @@ export default function IntegrationsPage() {
     }
   };
 
+  const handleConnectGmail = async () => {
+    setGmailConnecting(true);
+    try {
+      const { url } = await getGmailAuthUrlMutation.mutateAsync();
+      window.location.href = url;
+      setTimeout(() => setGmailConnecting(false), 10000);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Failed to start Gmail OAuth.";
+      toast.error(message);
+      setGmailConnecting(false);
+    }
+  };
+
+  const handleTestGmail = async () => {
+    setGmailTesting(true);
+    try {
+      const result = await testGmailMutation.mutateAsync();
+      setGmailTestResult(result.recentEmails.filter((e): e is { from: string; subject: string } => e !== null));
+      toast.success("Gmail connection verified!");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Gmail test failed.";
+      toast.error(message);
+      setGmailTestResult(null);
+    } finally {
+      setGmailTesting(false);
+    }
+  };
+
   const handleSaveSlack = async () => {
     setSlackSaving(true);
     try {
       await saveIntegrationsMutation.mutateAsync({
-        slackWebhookUrl: slackWebhookUrl || undefined,
+        slackBotToken: slackBotToken || undefined,
         slackChannelName: slackChannelName || undefined,
       });
       await refetchIntegrations();
@@ -138,6 +183,19 @@ export default function IntegrationsPage() {
       toast.error("Failed to save Slack settings.");
     } finally {
       setSlackSaving(false);
+    }
+  };
+
+  const handleSaveBox = async () => {
+    setBoxSaving(true);
+    try {
+      await saveIntegrationsMutation.mutateAsync({ boxAccessToken: boxAccessToken || undefined });
+      await refetchIntegrations();
+      toast.success("Box connected!");
+    } catch {
+      toast.error("Failed to save Box token.");
+    } finally {
+      setBoxSaving(false);
     }
   };
 
@@ -175,7 +233,7 @@ export default function IntegrationsPage() {
     try {
       await clearIntegrationsMutation.mutateAsync({ field: "slack" });
       await refetchIntegrations();
-      setSlackWebhookUrl("");
+      setSlackBotToken("");
       setSlackChannelName("");
       toast.success("Slack settings cleared.");
     } catch {
@@ -254,7 +312,7 @@ export default function IntegrationsPage() {
   }
 
   const gcalConnected = gcalStatus?.connected ?? false;
-  const slackConnected = !!(integrations?.slackWebhookUrl);
+  const slackConnected = !!(integrations as any)?.slackBotToken;
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
@@ -324,54 +382,6 @@ export default function IntegrationsPage() {
           </div>
         )}
 
-        {/* ── Gmail sub-section ── */}
-        {gcalConnected && (
-          <div className="mt-4 pt-4 border-t border-border">
-            <div className="flex items-center gap-3 mb-3">
-              {/* Gmail envelope icon */}
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "#EA4335" }}>
-                <svg viewBox="0 0 24 24" className="w-4 h-4" fill="white">
-                  <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
-                </svg>
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <p className="font-semibold text-sm">Gmail Summary for Zion</p>
-                  {gmailStatus?.gmailEnabled ? (
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-100 rounded-full px-2 py-0.5">
-                      <Check size={10} /> Enabled
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5">
-                      Re-auth needed
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground">Let Zion read & summarise your emails from the day.</p>
-              </div>
-            </div>
-            {gmailStatus?.gmailEnabled ? (
-              <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-start gap-2">
-                <Check size={14} className="text-green-600 mt-0.5 flex-shrink-0" />
-                <p className="text-xs text-green-700">Gmail access granted. In Zion, tap the <strong>Emails</strong> chip to get a daily summary.</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
-                  <AlertCircle size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-amber-700">
-                    Your current Google connection doesn't include Gmail access. Click <strong>Re-authorize</strong> to grant it — your calendar will still work.
-                  </p>
-                </div>
-                <Button size="sm" onClick={handleConnectGoogle} disabled={gcalConnecting} variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50">
-                  {gcalConnecting ? <Loader2 size={12} className="mr-1.5 animate-spin" /> : null}
-                  Re-authorize to enable Gmail
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-
         <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
           <div className="flex items-start gap-2">
             <Info size={14} className="text-blue-600 mt-0.5 flex-shrink-0" />
@@ -380,6 +390,165 @@ export default function IntegrationsPage() {
             </p>
           </div>
         </div>
+      </div>
+
+      {/* ── Gmail (standalone) ── */}
+      <div className="planner-card mb-6">
+        <div className="flex items-start gap-4 mb-4">
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm" style={{ background: "#EA4335" }}>
+            <svg viewBox="0 0 24 24" className="w-7 h-7" fill="white">
+              <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+            </svg>
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <h2 className="font-bold text-lg">Gmail</h2>
+              {gmailStatus?.gmailEnabled ? (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-100 rounded-full px-2 py-0.5">
+                  <Check size={11} /> Connected
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground bg-muted rounded-full px-2 py-0.5">
+                  <WifiOff size={11} /> Not connected
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground">Power your Chief of Staff briefings with real email context — follow-ups, open threads, and team updates.</p>
+          </div>
+        </div>
+
+        {gmailStatus?.gmailEnabled ? (
+          <div className="space-y-3">
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-start gap-2">
+              <Check size={15} className="text-green-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-green-700">Gmail is connected</p>
+                <p className="text-xs text-green-600 mt-0.5">Zion reads your inbox to surface follow-ups, drafts, and open threads in daily briefings.</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleTestGmail}
+                disabled={gmailTesting}
+              >
+                {gmailTesting ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <Wifi size={14} className="mr-1.5" />}
+                Test Connection
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleConnectGmail}
+                disabled={gmailConnecting}
+              >
+                {gmailConnecting ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
+                Re-authorize
+              </Button>
+            </div>
+            {gmailTestResult && (
+              <div className="bg-muted/50 rounded-lg p-3 space-y-1">
+                <p className="text-xs font-semibold text-muted-foreground mb-2">Recent emails:</p>
+                {gmailTestResult.map((email, i) => (
+                  <div key={i} className="text-xs">
+                    <span className="font-medium">{email.from}</span>
+                    <span className="text-muted-foreground"> — {email.subject}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="bg-muted/50 rounded-lg p-3">
+              <p className="text-sm text-muted-foreground">
+                Connect Gmail to let Zion surface follow-ups, drafts, and open threads from your inbox — no Google Calendar required.
+              </p>
+            </div>
+            <Button onClick={handleConnectGmail} disabled={gmailConnecting} style={{ background: "#EA4335" }} className="text-white hover:opacity-90">
+              {gmailConnecting ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : (
+                <svg viewBox="0 0 24 24" className="w-4 h-4 mr-1.5" fill="currentColor">
+                  <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                </svg>
+              )}
+              Connect Gmail
+            </Button>
+            <div className="text-xs">
+              <button
+                className="flex items-center gap-1 text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                onClick={() => { setShowGmailDiag(v => !v); refetchGmailDiag(); }}
+              >
+                <Info size={11} /> {showGmailDiag ? "Hide setup guide" : "Having trouble? View setup guide"}
+              </button>
+              {showGmailDiag && (
+                <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-3 text-xs">
+                  <p className="font-semibold text-amber-800">Google Cloud Console checklist for Gmail</p>
+
+                  {/* Redirect URI */}
+                  {gmailDiag?.redirectUri && (
+                    <div className="space-y-1">
+                      <p className="font-medium text-amber-700">① Add this Authorized Redirect URI in GCP → Credentials → OAuth 2.0 Client ID:</p>
+                      <div className="flex items-center gap-2 bg-white border border-amber-200 rounded px-2 py-1.5">
+                        <code className="flex-1 text-[11px] break-all text-slate-700">{gmailDiag.redirectUri}</code>
+                        <button
+                          className="text-amber-600 hover:text-amber-800 font-medium flex-shrink-0"
+                          onClick={() => { navigator.clipboard.writeText(gmailDiag!.redirectUri); toast.success("Copied!"); }}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                      <p className="text-amber-600">This must exactly match one of the entries in your OAuth client's redirect URIs list.</p>
+                    </div>
+                  )}
+
+                  <ol className="list-decimal list-inside space-y-1.5 text-amber-700">
+                    <li>Enable the <strong>Gmail API</strong> — APIs &amp; Services → Library → search "Gmail API" → Enable</li>
+                    <li>Add scope <code className="bg-white border border-amber-200 px-1 rounded text-[10px]">https://www.googleapis.com/auth/gmail.readonly</code> to the OAuth consent screen (Scopes tab)</li>
+                    <li>Add your email address as a <strong>test user</strong> on the consent screen (Test users tab) while app is in Testing mode</li>
+                    <li>If Google shows "Unverified app", click <strong>Advanced → Go to [app name]</strong></li>
+                  </ol>
+
+                  {/* Live status */}
+                  {gmailDiag && (
+                    <div className="pt-1 border-t border-amber-200 space-y-1">
+                      <p className="font-medium text-amber-800">Current status:</p>
+                      <div className="flex items-center gap-1.5">
+                        <span className={gmailDiag.credentialsSet ? "text-green-600" : "text-red-600"}>
+                          {gmailDiag.credentialsSet ? "✓" : "✗"}
+                        </span>
+                        <span>Google OAuth credentials configured</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={gmailDiag.hasCalendarToken ? "text-green-600" : "text-amber-500"}>
+                          {gmailDiag.hasCalendarToken ? "✓" : "○"}
+                        </span>
+                        <span>Google Calendar connected (same OAuth app)</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={gmailDiag.hasToken ? "text-green-600" : "text-amber-500"}>
+                          {gmailDiag.hasToken ? "✓" : "○"}
+                        </span>
+                        <span>Gmail token saved</span>
+                      </div>
+                      {gmailDiag.tokenTest && (
+                        <div className="flex items-start gap-1.5">
+                          <span className={gmailDiag.tokenTest.ok ? "text-green-600" : "text-red-600"}>
+                            {gmailDiag.tokenTest.ok ? "✓" : "✗"}
+                          </span>
+                          <span>
+                            {gmailDiag.tokenTest.ok
+                              ? "Token works — Gmail API responds correctly"
+                              : `Token test failed: ${gmailDiag.tokenTest.error}`}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Slack ── */}
@@ -403,30 +572,26 @@ export default function IntegrationsPage() {
                 </span>
               )}
             </div>
-            <p className="text-sm text-muted-foreground">Send daily summaries and reminder notifications to your Slack workspace.</p>
+            <p className="text-sm text-muted-foreground">Read your Slack messages in Chief of Staff briefings and send daily summaries to your workspace.</p>
           </div>
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-3">
           <div>
-            <label className="text-sm font-semibold block mb-1">Slack Incoming Webhook URL</label>
-            <p className="text-xs text-muted-foreground mb-2">
-              Create an incoming webhook at{" "}
-              <a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">
-                api.slack.com/messaging/webhooks <ExternalLink size={10} />
-              </a>
-            </p>
+            <label className="text-sm font-semibold block mb-1">Bot Token</label>
             <input
-              type="url"
-              value={slackWebhookUrl}
-              onChange={(e) => setSlackWebhookUrl(e.target.value)}
-              placeholder="https://hooks.slack.com/services/..."
+              type="password"
+              value={slackBotToken}
+              onChange={(e) => setSlackBotToken(e.target.value)}
+              placeholder="xoxb-..."
               className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary font-mono"
             />
           </div>
 
           <div>
-            <label className="text-sm font-semibold block mb-1">Channel Name (optional)</label>
+            <label className="text-sm font-semibold block mb-1">
+              Notification Channel <span className="font-normal text-muted-foreground">(for daily summaries)</span>
+            </label>
             <input
               type="text"
               value={slackChannelName}
@@ -436,58 +601,50 @@ export default function IntegrationsPage() {
             />
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={handleSaveSlack} disabled={slackSaving} size="sm">
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button onClick={handleSaveSlack} disabled={slackSaving || !slackBotToken} size="sm">
               {slackSaving ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
-              Save Slack Settings
+              {slackConnected ? "Update" : "Connect Slack"}
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleClearSlack}
-              disabled={slackClearing}
-              className="text-destructive hover:text-destructive"
-            >
-              {slackClearing ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
-              Clear Slack Settings
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleTestWebhook}
-              disabled={slackTesting || !slackConnected}
-              title={!slackConnected ? "Save a webhook URL first" : undefined}
-            >
-              {slackTesting ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <Wifi size={14} className="mr-1.5" />}
-              Test Webhook
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleSendDailySummary}
-              disabled={slackSending || !slackConnected}
-              title={!slackConnected ? "Save a webhook URL first" : undefined}
-            >
-              {slackSending ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
-              Send Today's Summary
-            </Button>
+            {slackConnected && (
+              <>
+                <Button variant="outline" size="sm" onClick={handleTestWebhook} disabled={slackTesting}>
+                  {slackTesting ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : <Wifi size={14} className="mr-1.5" />}
+                  Test
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleSendDailySummary} disabled={slackSending}>
+                  {slackSending ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
+                  Send Today's Summary
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleClearSlack}
+                  disabled={slackClearing}
+                  className="text-destructive hover:text-destructive"
+                >
+                  {slackClearing ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
+                  Disconnect
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
-        <div className="mt-4 p-3 bg-emerald-50 rounded-lg border border-emerald-100">
-          <div className="flex items-start gap-2">
-            <Info size={14} className="text-emerald-600 mt-0.5 flex-shrink-0" />
-            <div className="text-xs text-emerald-700">
-              <p className="font-medium mb-1">Slack setup steps:</p>
-              <ol className="list-decimal ml-4 space-y-0.5">
-                <li>Go to <strong>api.slack.com/apps</strong> and create a new app</li>
-                <li>Enable <strong>Incoming Webhooks</strong> and add a webhook to your workspace</li>
-                <li>Copy the webhook URL and paste it above</li>
-                <li>Save, then test with the "Test Webhook" button</li>
-              </ol>
-            </div>
+        <details className="mt-4 text-xs text-muted-foreground">
+          <summary className="cursor-pointer hover:text-foreground flex items-center gap-1">
+            <Info size={11} /> How to get a Bot Token
+          </summary>
+          <div className="mt-2 pl-3 border-l-2 border-border space-y-1.5">
+            <ol className="list-decimal list-inside space-y-1">
+              <li>Go to <a href="https://api.slack.com/apps" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">api.slack.com/apps <ExternalLink size={9} className="inline" /></a> → <strong>Create New App</strong> → From scratch</li>
+              <li>Under <strong>OAuth & Permissions</strong>, add these Bot Token Scopes: <code className="bg-muted px-1 rounded">channels:history</code> <code className="bg-muted px-1 rounded">im:history</code> <code className="bg-muted px-1 rounded">chat:write</code></li>
+              <li>Click <strong>Install to Workspace</strong> and approve</li>
+              <li>Copy the <strong>Bot User OAuth Token</strong> (starts with <code className="bg-muted px-1 rounded">xoxb-</code>) and paste it above</li>
+              <li>Invite the bot to your notification channel: <code className="bg-muted px-1 rounded">/invite @your-app-name</code></li>
+            </ol>
           </div>
-        </div>
+        </details>
       </div>
 
       {/* ── Notion (legacy) ── */}
@@ -575,6 +732,67 @@ export default function IntegrationsPage() {
               Disconnect Notion
             </Button>
           )}
+        </div>
+      </div>
+
+      {/* ── Box ── */}
+      <div className="planner-card mb-6">
+        <div className="flex items-start gap-4 mb-4">
+          <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center flex-shrink-0 shadow-sm">
+            <svg viewBox="0 0 24 24" className="w-7 h-7" fill="white">
+              <path d="M11.998 2.003L6.002 5.5v7l5.996 3.498L18 12.5v-7L11.998 2.003zm0 1.155l4.996 2.906v5.672l-4.996 2.906L7 11.736V6.064l4.998-2.906zm-6 10.34L.002 16.5l6 3.497v-1.155l-4.996-2.906V10.264L1.002 9.5v2.998zm12 0v2.998l-4.996 2.906V21l5.996-3.497L13 14.5h1l-1-1z" />
+            </svg>
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <h2 className="font-bold text-lg">Box</h2>
+              {(integrations as any)?.boxAccessToken && (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-100 rounded-full px-2 py-0.5">
+                  ✓ Connected
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground mt-1">Pull recent files into your Chief of Staff briefing.</p>
+          </div>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-semibold block mb-1">Box Access Token</label>
+            <p className="text-xs text-muted-foreground mb-2">
+              Generate a developer token at{" "}
+              <a href="https://app.box.com/developers/console" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">
+                app.box.com/developers/console <ExternalLink size={10} />
+              </a>{" "}
+              — create an app, then use the Developer Token (valid 60 min) or a long-lived service account token.
+            </p>
+            <input
+              type="password"
+              value={boxAccessToken}
+              onChange={(e) => setBoxAccessToken(e.target.value)}
+              placeholder="Paste your Box access token..."
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary font-mono"
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={handleSaveBox} disabled={boxSaving} size="sm">
+              {boxSaving ? <Loader2 size={14} className="mr-1.5 animate-spin" /> : null}
+              Save Box Token
+            </Button>
+            {(integrations as any)?.boxAccessToken && (
+              <Button
+                variant="outline" size="sm"
+                className="text-destructive hover:text-destructive"
+                onClick={async () => {
+                  await saveIntegrationsMutation.mutateAsync({ boxAccessToken: undefined });
+                  setBoxAccessToken("");
+                  await refetchIntegrations();
+                  toast.success("Box disconnected.");
+                }}
+              >
+                Disconnect Box
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </div>

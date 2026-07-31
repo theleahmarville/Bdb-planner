@@ -8,9 +8,256 @@ import {
   CheckCircle2, TrendingUp, Star, Bell, BookOpen,
   Sparkles, Droplets, Share2, Moon, Send, Loader2,
   Instagram, Facebook, Twitter, Youtube,
+  Mail, Briefcase, RefreshCw, X, AlertCircle, ChevronDown, ChevronUp,
+  MessageSquare, FileText, Box,
 } from "lucide-react";
+import { Streamdown } from "streamdown";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+
+// ── Gmail Email Summary Panel (powered by Zion) ───────────────────────────────
+function EmailSummaryPanel({ onClose }: { onClose: () => void }) {
+  const { isAuthenticated } = useAuth();
+  const [result, setResult] = useState<{ summary: string; emailCount: number; emails: { from: string; subject: string; snippet: string }[] } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const { data: gmailStatus } = trpc.gmail.status.useQuery(undefined, { enabled: isAuthenticated });
+  const summaryMutation = trpc.gmail.summarizeToday.useMutation();
+
+  const parseName = (from: string) => from.replace(/<[^>]+>/, "").trim() || from;
+
+  const fetchEmails = async () => {
+    setLoading(true); setError("");
+    try {
+      const data = await summaryMutation.mutateAsync({ date: new Date().toISOString().slice(0, 10) });
+      setResult(data as any);
+    } catch (e: any) { setError(e?.message ?? "Could not fetch emails."); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchEmails(); }, []);
+
+  return (
+    <div className="planner-card overflow-hidden p-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-gradient-to-r from-red-50 to-orange-50">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-full bg-red-100 flex items-center justify-center">
+            <Mail className="w-3.5 h-3.5 text-red-600" />
+          </div>
+          <div>
+            <p className="text-sm font-bold">Email Summary</p>
+            <p className="text-[10px] text-muted-foreground">
+              {result ? `${result.emailCount} email${result.emailCount !== 1 ? "s" : ""} today · powered by Zion` : "Today's inbox · powered by Zion"}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button onClick={fetchEmails} disabled={loading}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:bg-red-100 hover:text-red-600 transition-colors" title="Refresh">
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+          </button>
+          <button onClick={onClose}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+      <div className="max-h-80 overflow-y-auto">
+        {loading && !result && (
+          <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
+            <Loader2 className="w-4 h-4 animate-spin" /><span className="text-sm">Fetching your emails…</span>
+          </div>
+        )}
+        {!gmailStatus?.gmailEnabled && !loading && (
+          <div className="p-4 flex items-start gap-3">
+            <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium">Gmail not connected</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Go to <Link to="/integrations" className="text-emerald-600 underline">Integrations</Link> and re-authorize Google to enable Gmail access.</p>
+            </div>
+          </div>
+        )}
+        {error && (
+          <div className="p-4 flex items-start gap-3">
+            <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+            <p className="text-sm text-red-700">{error}</p>
+          </div>
+        )}
+        {result && (
+          <div className="p-4 space-y-3">
+            {result.emailCount === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-2">📭 Inbox is clear today!</p>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  {result.emails.slice(0, 6).map((email, i) => (
+                    <div key={i} className="flex items-start gap-2.5 p-2.5 rounded-xl bg-muted/30 border border-border">
+                      <div className="w-7 h-7 rounded-full bg-red-100 flex items-center justify-center shrink-0 text-[10px] font-bold text-red-600">
+                        {parseName(email.from).charAt(0).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold truncate">{email.subject}</p>
+                        <p className="text-[10px] text-muted-foreground truncate">{parseName(email.from)}</p>
+                        {email.snippet && <p className="text-[10px] text-muted-foreground/70 mt-0.5 line-clamp-1">{email.snippet}</p>}
+                      </div>
+                    </div>
+                  ))}
+                  {result.emails.length > 6 && <p className="text-[10px] text-center text-muted-foreground">+{result.emails.length - 6} more</p>}
+                </div>
+                <div className="border-t border-border pt-3">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-emerald-500" /> Zion's Summary
+                  </p>
+                  <div className="prose prose-sm max-w-none prose-p:my-1 text-sm">
+                    <Streamdown>{result.summary}</Streamdown>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Chief of Staff Panel (powered by Zion) ────────────────────────────────────
+type CoSBriefing = {
+  briefing: string;
+  dateLabel: string;
+  integrations: {
+    hasGmail: boolean; hasCalendar: boolean; hasSlack: boolean;
+    hasNotion: boolean; hasBox: boolean; hasGranola: boolean;
+    gmailCount: number; calendarCount: number; slackCount: number;
+    notionCount: number; boxCount: number; granolaCount: number;
+  };
+};
+
+function IntegrationPill({ icon, label, count, active }: { icon: React.ReactNode; label: string; count: number; active: boolean }) {
+  return (
+    <div className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border ${
+      active && count > 0 ? "bg-emerald-50 border-emerald-200 text-emerald-700" :
+      active ? "bg-muted border-border text-muted-foreground" :
+      "bg-gray-50 border-gray-200 text-gray-400"
+    }`}>
+      {icon}
+      {label}{active && count > 0 ? ` (${count})` : ""}
+    </div>
+  );
+}
+
+function ChiefOfStaffPanel({ onClose }: { onClose: () => void }) {
+  const [briefing, setBriefing] = useState<CoSBriefing | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const chiefOfStaffMutation = trpc.zion.chiefOfStaff.useMutation();
+  const emailBriefingMutation = trpc.subscription.emailBriefing.useMutation();
+
+  const generate = async () => {
+    setLoading(true);
+    try {
+      const data = await chiefOfStaffMutation.mutateAsync({ date: new Date().toISOString().slice(0, 10) });
+      setBriefing(data as CoSBriefing);
+    } catch (e: any) { toast.error(e?.message ?? "Could not generate briefing."); }
+    finally { setLoading(false); }
+  };
+
+  const sendToInbox = async () => {
+    if (!briefing) return;
+    setSendingEmail(true);
+    try {
+      await emailBriefingMutation.mutateAsync({
+        briefing: briefing.briefing,
+        dateLabel: briefing.dateLabel,
+        attachFile: true,
+      });
+      toast.success("Briefing sent to your inbox!");
+    } catch (e: any) {
+      toast.error(e?.message ?? "Could not send email.");
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
+  useEffect(() => { generate(); }, []);
+
+  const integ = briefing?.integrations;
+
+  return (
+    <div className="planner-card overflow-hidden p-0">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-gradient-to-r from-violet-50 to-indigo-50">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-full bg-violet-100 flex items-center justify-center">
+            <Briefcase className="w-3.5 h-3.5 text-violet-600" />
+          </div>
+          <div>
+            <p className="text-sm font-bold">Chief of Staff</p>
+            <p className="text-[10px] text-muted-foreground">{briefing?.dateLabel ?? "Daily briefing"} · powered by Zion</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          {briefing && (
+            <button onClick={sendToInbox} disabled={sendingEmail || loading}
+              className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium text-violet-700 bg-violet-100 hover:bg-violet-200 transition-colors disabled:opacity-50"
+              title="Send briefing to your inbox">
+              {sendingEmail ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+              {sendingEmail ? "Sending…" : "Send to inbox"}
+            </button>
+          )}
+          <button onClick={generate} disabled={loading}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:bg-violet-100 hover:text-violet-600 transition-colors" title="Regenerate">
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+          </button>
+          <button onClick={onClose}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Integration status pills */}
+      {integ && (
+        <div className="px-4 py-2 border-b border-border bg-white/60 flex flex-wrap gap-1.5">
+          <IntegrationPill icon={<Mail className="w-2.5 h-2.5" />} label="Gmail" count={integ.gmailCount} active={integ.hasGmail} />
+          <IntegrationPill icon={<MessageSquare className="w-2.5 h-2.5" />} label="Slack" count={integ.slackCount} active={integ.hasSlack} />
+          <IntegrationPill icon={<CalendarDays className="w-2.5 h-2.5" />} label="Calendar" count={integ.calendarCount} active={integ.hasCalendar} />
+          <IntegrationPill icon={<Sparkles className="w-2.5 h-2.5" />} label="Granola" count={integ.granolaCount} active={integ.hasGranola} />
+          <IntegrationPill icon={<BookOpen className="w-2.5 h-2.5" />} label="Notion" count={integ.notionCount} active={integ.hasNotion} />
+          <IntegrationPill icon={<Box className="w-2.5 h-2.5" />} label="Box" count={integ.boxCount} active={integ.hasBox} />
+        </div>
+      )}
+
+      {/* Briefing content */}
+      <div className="max-h-[420px] overflow-y-auto">
+        {loading && (
+          <div className="flex flex-col items-center justify-center gap-3 py-10 text-muted-foreground">
+            <div className="w-10 h-10 rounded-full bg-violet-100 flex items-center justify-center">
+              <Loader2 className="w-5 h-5 text-violet-600 animate-spin" />
+            </div>
+            <p className="text-sm">Pulling your briefing together…</p>
+            <p className="text-[10px] text-muted-foreground/60">Checking email, calendar, Slack, Notion…</p>
+          </div>
+        )}
+        {!loading && briefing && (
+          <div className="p-4">
+            <div className="prose prose-sm max-w-none prose-h2:text-sm prose-h2:font-bold prose-h2:mt-3 prose-h2:mb-1 prose-h2:first:mt-0 prose-ul:my-1 prose-li:my-0.5 prose-li:text-xs prose-p:text-xs prose-p:my-1">
+              <Streamdown>{briefing.briefing}</Streamdown>
+            </div>
+            {!integ?.hasGmail && !integ?.hasSlack && !integ?.hasNotion && !integ?.hasBox && (
+              <div className="mt-3 p-2.5 rounded-lg bg-violet-50 border border-violet-200">
+                <p className="text-[10px] text-violet-700 font-medium">Connect more integrations for a richer briefing</p>
+                <p className="text-[10px] text-violet-500 mt-0.5">
+                  Gmail, Slack, Notion, and Box can all feed into your Chief of Staff. <a href="/integrations" className="underline">Set up in Integrations →</a>
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function formatSlotTime(key: string): string {
@@ -60,6 +307,13 @@ export default function DashboardPage() {
   const checkInMutation = trpc.community.checkIn.useMutation({
     onSuccess: () => { refetchCheckIn(); toast.success("Check-in saved!"); },
   });
+  const { data: streakData } = trpc.zion.streak.useQuery(undefined, { staleTime: 60_000 });
+  const notifyStreakMutation = trpc.zion.checkAndNotifyStreak.useMutation();
+
+  // On mount: silently check if streak was broken and queue a Zion note
+  useEffect(() => {
+    notifyStreakMutation.mutate();
+  }, []);
 
   // ── greeting ──────────────────────────────────────────────────────────────
   const timeSlot =
@@ -142,6 +396,9 @@ export default function DashboardPage() {
   });
   const nightlyDue = nightlyStatus?.due && !nightlyStatus?.completed && hour >= 17;
 
+  // ── Email / Chief of Staff panels ────────────────────────────────────────
+  const [activePanel, setActivePanel] = useState<"emails" | "chiefofstaff" | null>(null);
+
   // ── Zion quick prompt ─────────────────────────────────────────────────────
   const [zionPrompt, setZionPrompt] = useState("");
   const handleZionPrompt = (e: React.FormEvent) => {
@@ -186,7 +443,157 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── 2: Daily Devotion ─────────────────────────────────────────────── */}
+      {/* ── 2: Streak Counter ─────────────────────────────────────────────── */}
+      {streakData !== undefined && (
+        <div
+          onClick={() => navigate("/zion")}
+          className={cn(
+            "planner-card cursor-pointer hover:shadow-md transition-all group",
+            streakData.currentStreak === 0
+              ? "border-amber-200 bg-amber-50/40"
+              : streakData.currentStreak >= 7
+              ? "border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50"
+              : "border-emerald-200 bg-gradient-to-r from-emerald-50 to-green-50"
+          )}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {/* Flame icon — grows with streak */}
+              <div className={cn(
+                "w-12 h-12 rounded-xl flex items-center justify-center text-2xl shrink-0 transition-transform group-hover:scale-110",
+                streakData.currentStreak === 0 ? "bg-amber-100" :
+                streakData.currentStreak >= 30 ? "bg-orange-500 shadow-lg shadow-orange-200" :
+                streakData.currentStreak >= 7 ? "bg-orange-400 shadow-md shadow-orange-100" :
+                "bg-emerald-100"
+              )}>
+                {streakData.currentStreak === 0 ? "💤" :
+                 streakData.currentStreak >= 30 ? "🔥" :
+                 streakData.currentStreak >= 7 ? "🔥" : "✨"}
+              </div>
+              <div>
+                <div className="flex items-baseline gap-1.5">
+                  <span className={cn(
+                    "text-3xl font-black",
+                    streakData.currentStreak === 0 ? "text-amber-600" :
+                    streakData.currentStreak >= 7 ? "text-orange-600" : "text-emerald-700"
+                  )}>
+                    {streakData.currentStreak}
+                  </span>
+                  <span className="text-sm font-semibold text-muted-foreground">
+                    day{streakData.currentStreak !== 1 ? "s" : ""} in a row
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {streakData.currentStreak === 0
+                    ? streakData.lastActiveDate
+                      ? "You missed yesterday — today's the perfect day to restart 💛"
+                      : "Start your streak today — open the planner and get to work ✨"
+                    : streakData.currentStreak === 1
+                    ? "Great start! Show up again tomorrow to build momentum 💪"
+                    : streakData.currentStreak < 7
+                    ? `Keep going — ${7 - streakData.currentStreak} more day${7 - streakData.currentStreak !== 1 ? "s" : ""} to your first week streak 🎯`
+                    : streakData.currentStreak < 30
+                    ? `You're on a roll! Don't break the chain 🔥`
+                    : `Legendary consistency — ${streakData.currentStreak} days strong! 🏆`
+                  }
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col items-end gap-1 shrink-0">
+              {streakData.longestStreak > 0 && (
+                <div className="text-right">
+                  <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Best</p>
+                  <p className="text-sm font-bold text-muted-foreground">{streakData.longestStreak}d</p>
+                </div>
+              )}
+              {streakData.isActiveToday && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-100 rounded-full px-2 py-0.5">
+                  <CheckCircle2 size={10} /> Today ✓
+                </span>
+              )}
+              <ChevronRight size={14} className="text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+            </div>
+          </div>
+
+          {/* Milestone badges */}
+          {streakData.currentStreak >= 3 && (
+            <div className="mt-3 pt-3 border-t border-current/5 flex gap-2 flex-wrap">
+              {[
+                { days: 3, label: "3-day", emoji: "⚡" },
+                { days: 7, label: "Week", emoji: "🗓️" },
+                { days: 14, label: "2 Weeks", emoji: "💪" },
+                { days: 30, label: "Month", emoji: "🏆" },
+              ].map(({ days, label, emoji }) => (
+                <div
+                  key={days}
+                  className={cn(
+                    "text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1",
+                    streakData.currentStreak >= days
+                      ? "bg-orange-100 text-orange-700"
+                      : "bg-muted/50 text-muted-foreground/40"
+                  )}
+                >
+                  {emoji} {label}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Zion-powered: Email Summary + Chief of Staff ─────────────────── */}
+      <div className="grid grid-cols-2 gap-3">
+        {/* Email Summary trigger */}
+        <button
+          onClick={() => setActivePanel(p => p === "emails" ? null : "emails")}
+          className={cn(
+            "planner-card flex items-center gap-3 text-left transition-all active:scale-[0.98]",
+            activePanel === "emails" ? "ring-2 ring-red-300 bg-red-50/50" : "hover:bg-muted/30"
+          )}
+        >
+          <div className="w-9 h-9 rounded-xl bg-red-100 flex items-center justify-center shrink-0">
+            <Mail className="w-4 h-4 text-red-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold truncate">Email Summary</p>
+            <p className="text-[10px] text-muted-foreground">Today's inbox via Zion</p>
+          </div>
+          {activePanel === "emails"
+            ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" />
+            : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
+        </button>
+
+        {/* Chief of Staff trigger */}
+        <button
+          onClick={() => setActivePanel(p => p === "chiefofstaff" ? null : "chiefofstaff")}
+          className={cn(
+            "planner-card flex items-center gap-3 text-left transition-all active:scale-[0.98]",
+            activePanel === "chiefofstaff" ? "ring-2 ring-violet-300 bg-violet-50/50" : "hover:bg-muted/30"
+          )}
+        >
+          <div className="w-9 h-9 rounded-xl bg-violet-100 flex items-center justify-center shrink-0">
+            <Briefcase className="w-4 h-4 text-violet-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold truncate">Chief of Staff</p>
+            <p className="text-[10px] text-muted-foreground">Daily briefing via Zion</p>
+          </div>
+          {activePanel === "chiefofstaff"
+            ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" />
+            : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
+        </button>
+      </div>
+
+      {/* Expanded panels */}
+      {activePanel === "emails" && (
+        <EmailSummaryPanel onClose={() => setActivePanel(null)} />
+      )}
+      {activePanel === "chiefofstaff" && (
+        <ChiefOfStaffPanel onClose={() => setActivePanel(null)} />
+      )}
+
+      {/* ── Daily Devotion ────────────────────────────────────────────────── */}
       {devotion && !devotion.dismissed && (
         <div className="planner-card relative overflow-hidden border-0"
           style={{ background: "linear-gradient(135deg,#1a1230 0%,#2d1f4e 100%)" }}>
@@ -574,7 +981,7 @@ export default function DashboardPage() {
         </div>
         {bigGoals.length > 0 && (
           <div className="grid grid-cols-2 gap-2 mb-4">
-            {bigGoals.slice(0, 4).map((goal: any, i) => (
+            {bigGoals.slice(0, 4).map((goal: any, i: number) => (
               <div key={goal.id ?? i}
                 className="flex items-center justify-between gap-1 px-3 py-2.5 rounded-xl bg-amber-50 dark:bg-amber-900/15 border border-amber-100 dark:border-amber-800/30">
                 <span className={cn("text-xs font-medium truncate", !(goal.title as string)?.trim() && "text-muted-foreground italic")}>

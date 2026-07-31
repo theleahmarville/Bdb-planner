@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import {
-  Eye, EyeOff, User, Lock, LogOut, Camera, Globe, Clock, Loader2, X, Bell, Mail, Link, Copy, Check,
+  Eye, EyeOff, User, Lock, LogOut, Camera, Globe, Clock, Loader2, X, Bell, Mail, Link, Copy, Check, BookOpen, Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
@@ -71,6 +71,99 @@ function PushNotificationToggle() {
           )}
         />
       </button>
+    </div>
+  );
+}
+
+function ToggleRow({
+  label, description, checked, onChange, disabled,
+}: { label: string; description: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-4 bg-[#faf8f5] rounded-xl px-4 py-3">
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold">{label}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+      </div>
+      <button
+        onClick={() => !disabled && onChange(!checked)}
+        disabled={disabled}
+        className={cn(
+          "relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none disabled:opacity-50 shrink-0",
+          checked ? "bg-emerald-500" : "bg-gray-200"
+        )}
+        aria-checked={checked}
+        role="switch"
+      >
+        <span className={cn(
+          "inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform duration-200",
+          checked ? "translate-x-6" : "translate-x-1"
+        )} />
+      </button>
+    </div>
+  );
+}
+
+function NotificationPreferences({ user, onRefresh }: { user: any; onRefresh: () => Promise<void> }) {
+  const [emailEnabled, setEmailEnabled] = useState<boolean>(user?.emailNotificationsEnabled ?? true);
+  const [devotionEnabled, setDevotionEnabled] = useState<boolean>(user?.devotionPopupEnabled ?? true);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async (updates: { emailNotificationsEnabled?: boolean; devotionPopupEnabled?: boolean }) => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/auth/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(updates),
+      });
+      if (!res.ok) { toast.error("Failed to save preferences"); return; }
+      await onRefresh();
+      toast.success("Preferences saved");
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="planner-card mb-6 space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0">
+          <Bell size={16} className="text-white" />
+        </div>
+        <div>
+          <h3 className="font-bold text-base">Notifications &amp; Display</h3>
+          <p className="text-xs text-muted-foreground">Control what Zion sends and shows you</p>
+        </div>
+      </div>
+
+      <ToggleRow
+        label="Email reminders"
+        description="Streak check-ins, habit nudges, morning briefings, weekly and monthly reviews"
+        checked={emailEnabled}
+        disabled={saving}
+        onChange={v => { setEmailEnabled(v); handleSave({ emailNotificationsEnabled: v }); }}
+      />
+
+      <ToggleRow
+        label="Daily Word pop-up"
+        description="Show the Bible verse and Zion affirmation when you open the planner each day"
+        checked={devotionEnabled}
+        disabled={saving}
+        onChange={v => { setDevotionEnabled(v); handleSave({ devotionPopupEnabled: v }); }}
+      />
+
+      <div className="flex items-start gap-2.5 bg-indigo-50 dark:bg-indigo-950/30 rounded-xl px-4 py-3 border border-indigo-100 dark:border-indigo-900">
+        <BookOpen className="w-4 h-4 text-indigo-500 mt-0.5 shrink-0" />
+        <div>
+          <p className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">Daily Word Archive</p>
+          <p className="text-xs text-indigo-600/80 dark:text-indigo-400 mt-0.5">
+            All your past verses and affirmations are saved automatically. Find them in the sidebar under <strong>Daily Word</strong> — tap any entry to expand and download it as an image.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -508,6 +601,9 @@ export default function SettingsPage() {
         <PushNotificationToggle />
       </div>
 
+      {/* ── Notification & Display Preferences ───────────────────────────────── */}
+      <NotificationPreferences user={anyUser} onRefresh={refresh} />
+
       {/* ── Password card ─────────────────────────────────────────────────────── */}
       <div className="planner-card mb-6">
         <div className="flex items-center gap-3 mb-6">
@@ -630,21 +726,78 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* ── Danger zone ───────────────────────────────────────────────────────── */}
-      <div className="planner-card border-red-100">
+      {/* ── Sign Out ─────────────────────────────────────────────────────────── */}
+      <SignOutCard logout={logout} />
+    </div>
+  );
+}
+
+function SignOutCard({ logout }: { logout: () => Promise<void> }) {
+  const [confirming, setConfirming] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    try {
+      await logout();
+    } catch {
+      setSigningOut(false);
+      setConfirming(false);
+    }
+  };
+
+  if (!confirming) {
+    return (
+      <div className="planner-card border border-red-100">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center shrink-0">
             <LogOut size={16} className="text-red-600" />
           </div>
-          <h2 className="font-bold text-base">Sign Out</h2>
+          <div>
+            <h2 className="font-bold text-base">Sign Out</h2>
+            <p className="text-xs text-muted-foreground">You'll be taken back to the sign-in page</p>
+          </div>
         </div>
-        <p className="text-sm text-muted-foreground mb-4">Sign out of your account on this device.</p>
         <Button
           variant="outline"
-          onClick={logout}
-          className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+          onClick={() => setConfirming(true)}
+          className="w-full h-11 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 font-semibold"
         >
+          <LogOut size={15} className="mr-2" />
           Sign Out
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="planner-card border border-red-200 bg-red-50">
+      <div className="flex items-center gap-3 mb-3">
+        <div className="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+          <LogOut size={16} className="text-red-600" />
+        </div>
+        <div>
+          <h2 className="font-bold text-base text-red-700">Are you sure?</h2>
+          <p className="text-xs text-red-500">You'll need to sign back in to access your planner</p>
+        </div>
+      </div>
+      <div className="flex gap-2 mt-4">
+        <Button
+          variant="outline"
+          onClick={() => setConfirming(false)}
+          disabled={signingOut}
+          className="flex-1 h-11 border-border"
+        >
+          Cancel
+        </Button>
+        <Button
+          onClick={handleSignOut}
+          disabled={signingOut}
+          className="flex-1 h-11 bg-red-600 hover:bg-red-700 text-white font-semibold border-0"
+        >
+          {signingOut
+            ? <><Loader2 size={15} className="mr-2 animate-spin" />Signing out…</>
+            : <><LogOut size={15} className="mr-2" />Yes, sign out</>}
         </Button>
       </div>
     </div>

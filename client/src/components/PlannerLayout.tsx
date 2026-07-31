@@ -25,6 +25,8 @@ import {
   Flame,
   Trophy,
   Home,
+  Crown,
+  Shield,
 } from "lucide-react";
 import { MONTHS } from "@/lib/planner";
 import { cn } from "@/lib/utils";
@@ -33,6 +35,7 @@ import GreetingModal from "./GreetingModal";
 import AIDigestPanel from "./AIDigestPanel";
 import NightReflectionModal from "./NightReflectionModal";
 import DailyDevotionModal from "./DailyDevotionModal";
+import DevotionHistoryPanel from "./DevotionHistoryPanel";
 import RemindersPanel from "./RemindersPanel";
 import GlobalSearch from "./GlobalSearch";
 import { trpc } from "@/lib/trpc";
@@ -150,6 +153,7 @@ export default function PlannerLayout({
   const [digestOpen, setDigestOpen] = useState(false);
   const [nightReflectionOpen, setNightReflectionOpen] = useState(false);
   const [devotionOpen, setDevotionOpen] = useState(false);
+  const [devotionHistoryOpen, setDevotionHistoryOpen] = useState(false);
   const [remindersOpen, setRemindersOpen] = useState(false);
 
   // Reminder notifications hook
@@ -182,7 +186,10 @@ export default function PlannerLayout({
     return !!localStorage.getItem(`greeting-shown-${userId}-${today}-${slot}`);
   };
 
+  const devotionPopupEnabled = (user as any)?.devotionPopupEnabled !== false;
+
   const openDevotionIfDue = () => {
+    if (!devotionPopupEnabled) return;
     if (!localStorage.getItem(devotionDayKey)) {
       setDevotionOpen(true);
       localStorage.setItem(devotionDayKey, '1');
@@ -192,6 +199,7 @@ export default function PlannerLayout({
   // If no greeting is expected (or already shown), open devotion directly after a short delay
   useEffect(() => {
     if (!isAuthenticated || !user?.id) return;
+    if (!devotionPopupEnabled) return; // user has disabled the popup
     if (localStorage.getItem(devotionDayKey)) return; // devotion already shown today
     if (greetingAlreadyShownOrNotDue(user?.id)) {
       // Greeting won't fire — open devotion directly
@@ -237,6 +245,7 @@ export default function PlannerLayout({
   const isWeekly = location.startsWith("/weekly");
   const isNotes = location === "/notes";
   const isIntegrations = location === "/integrations";
+  const isSubscription = location === "/subscription";
   const isZion = location === "/zion";
   const isCommunity = location === "/community";
 
@@ -390,6 +399,16 @@ export default function PlannerLayout({
           <SidebarLeaderboard onNavigate={() => setDrawerOpen(false)} />
         )}
 
+        {/* Daily Word Archive */}
+        <button
+          onClick={() => setDevotionHistoryOpen(true)}
+          className={cn("sidebar-nav-item w-full text-left")}
+          title={!sidebarOpen ? "Daily Word Archive" : undefined}
+        >
+          <BookOpen size={18} className="flex-shrink-0 text-indigo-500" />
+          {sidebarOpen && <span className="text-indigo-600 font-medium">Daily Word</span>}
+        </button>
+
         {/* Integrations */}
         <Link href="/integrations">
           <div className={cn("sidebar-nav-item", isIntegrations && "active")} title={!sidebarOpen ? "Integrations" : undefined}>
@@ -397,6 +416,24 @@ export default function PlannerLayout({
             {sidebarOpen && <span>Integrations</span>}
           </div>
         </Link>
+
+        {/* Subscription / Plans */}
+        <Link href="/subscription">
+          <div className={cn("sidebar-nav-item", isSubscription && "active")} title={!sidebarOpen ? "Plans & Billing" : undefined}>
+            <Crown size={18} className="flex-shrink-0 text-amber-500" />
+            {sidebarOpen && <span className="text-amber-600 font-medium">Plans</span>}
+          </div>
+        </Link>
+
+        {/* Admin Panel — visible only to admins */}
+        {(user as any)?.role === "admin" && (
+          <Link href="/admin">
+            <div className="sidebar-nav-item" title={!sidebarOpen ? "Admin Panel" : undefined}>
+              <Shield size={18} className="flex-shrink-0 text-rose-500" />
+              {sidebarOpen && <span className="text-rose-600 font-medium">Admin</span>}
+            </div>
+          </Link>
+        )}
 
         <div className="border-t border-sidebar-border my-2" />
 
@@ -609,6 +646,10 @@ export default function PlannerLayout({
         open={devotionOpen}
         onClose={() => setDevotionOpen(false)}
       />
+      {/* Devotion History Panel */}
+      {devotionHistoryOpen && (
+        <DevotionHistoryPanel onClose={() => setDevotionHistoryOpen(false)} />
+      )}
       {/* Reminders Panel */}
       <RemindersPanel
         open={remindersOpen}

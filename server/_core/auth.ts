@@ -7,12 +7,63 @@ import { getSessionCookieOptions } from "./cookies";
 import { authService } from "./sdk";
 import { ENV } from "./env";
 import { google } from "googleapis";
-import { sendWelcomeEmail, sendPasswordResetEmail } from "./email";
-import { SignJWT, jwtVerify } from "jose";
+import { sendWelcomeEmail, sendPasswordResetEmail, sendOtpEmail } from "./email";
+import { SignJWT, jwtVerify, createRemoteJWKSet } from "jose";
+import { verifyOAuthState } from "./tokenEncryption";
+import { auditFromReq, recordLoginAttempt, isLockedOut } from "./auditLog";
+import { validatePasswordStrength, sanitizeString, logSecurityEvent } from "./security";
+
+/** Timing-safe generic error — prevents email enumeration (OWASP A07) */
+const AUTH_ERR = "Invalid email or password";
+
+/** Apple's public key set for verifying Sign in with Apple identity tokens */
+const APPLE_JWKS = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
+
+/** COPPA — must be 13+ to create an account without parental consent */
+const MIN_AGE_YEARS = 13;
+
+function getClientIp(req: Request): string {
+  const fwd = req.headers["x-forwarded-for"];
+  return (typeof fwd === "string" ? fwd.split(",")[0].trim() : req.ip) ?? "unknown";
+}
+
+/** Returns null if valid, or an error string */
+function validateAge(dateOfBirth: unknown): string | null {
+  if (!dateOfBirth || typeof dateOfBirth !== "string") {
+    return "Date of birth is required";
+  }
+  const dob = new Date(dateOfBirth);
+  if (isNaN(dob.getTime())) return "Invalid date of birth";
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const monthDiff = today.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) age--;
+  if (age < MIN_AGE_YEARS) {
+    return `You must be at least ${MIN_AGE_YEARS} years old to create an account`;
+  }
+  if (age > 120) return "Invalid date of birth";
+  return null;
+}
+
+/** Resolves the Google OAuth redirect URI — prefers explicit env var, falls back to Railway domain */
+export function getGoogleRedirectUri(): string {
+  if (process.env.GOOGLE_REDIRECT_URI) return process.env.GOOGLE_REDIRECT_URI;
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/api/auth/google/callback`;
+  return "http://localhost:3000/api/auth/google/callback";
+}
 
 export function registerAuthRoutes(app: Express) {
   // GET /api/auth/google/callback — Google OAuth callback
   app.get("/api/auth/google/callback", async (req: Request, res: Response) => {
+    // Google sends an error param when the user denies access or the scope is blocked
+    const googleError = req.query.error as string | undefined;
+    if (googleError) {
+      console.error(`[Auth] Google OAuth returned error: ${googleError} — description: ${req.query.error_description ?? "(none)"}`);
+      const errCode = googleError === "access_denied" ? "google_access_denied" : "google_auth_failed";
+      res.redirect(`/integrations?error=${errCode}`);
+      return;
+    }
+
     const code = req.query.code as string | undefined;
     if (!code) {
       res.redirect("/integrations?error=google_no_code");
@@ -21,7 +72,7 @@ export function registerAuthRoutes(app: Express) {
 
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback";
+    const redirectUri = getGoogleRedirectUri();
 
     if (!clientId || !clientSecret) {
       res.redirect("/integrations?error=google_not_configured");
@@ -32,12 +83,17 @@ export function registerAuthRoutes(app: Express) {
       // Extract userId from the state parameter (more reliable than cookie during OAuth redirect)
       const stateParam = req.query.state as string | undefined;
       let userId: number | null = null;
+      let gmailOnly = false;
+
       if (stateParam) {
         try {
-          const decoded = JSON.parse(Buffer.from(stateParam, "base64").toString("utf-8"));
-          userId = decoded.userId ?? null;
+          const decoded = verifyOAuthState(stateParam);
+          userId = typeof decoded.userId === "number" ? decoded.userId : null;
+          gmailOnly = !!decoded.gmailOnly;
         } catch {
-          console.error("[Auth] Failed to parse OAuth state param");
+          console.error("[Auth] OAuth state signature invalid — possible CSRF attempt");
+          res.redirect("/integrations?error=google_auth_failed");
+          return;
         }
       }
       // Fallback to cookie-based auth if state is missing
@@ -56,15 +112,26 @@ export function registerAuthRoutes(app: Express) {
       // Check whether Gmail scope was granted in this auth flow
       const grantedScopes: string = (tokens.scope as string) ?? "";
       const hasGmailScope = grantedScopes.includes("gmail");
+      const hasCalendarScope = grantedScopes.includes("calendar");
 
-      await db.upsertUserIntegrations(userId, {
-        googleAccessToken: tokens.access_token ?? null,
-        googleRefreshToken: tokens.refresh_token ?? null,
-        googleTokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
-        ...(hasGmailScope ? { gmailEnabled: 1 } : {}),
-      } as any);
+      const updates: Record<string, unknown> = {};
 
-      res.redirect(hasGmailScope ? "/integrations?connected=google_gmail" : "/integrations?connected=google");
+      if (gmailOnly) {
+        // Gmail-only flow — store in dedicated Gmail token columns
+        updates.gmailAccessToken = tokens.access_token ?? null;
+        updates.gmailTokenExpiry = tokens.expiry_date ? new Date(tokens.expiry_date) : null;
+        if (tokens.refresh_token) updates.gmailRefreshToken = tokens.refresh_token;
+      } else {
+        // Calendar flow — store in Google Calendar token columns
+        updates.googleAccessToken = tokens.access_token ?? null;
+        updates.googleTokenExpiry = tokens.expiry_date ? new Date(tokens.expiry_date) : null;
+        if (tokens.refresh_token) updates.googleRefreshToken = tokens.refresh_token;
+      }
+
+      await db.upsertUserIntegrations(userId, updates as any);
+
+      const redirect = gmailOnly ? "/integrations?connected=gmail" : "/integrations?connected=google";
+      res.redirect(redirect);
     } catch (error) {
       console.error("[Auth] Google OAuth callback failed:", error);
       res.redirect("/integrations?error=google_auth_failed");
@@ -155,20 +222,29 @@ export function registerAuthRoutes(app: Express) {
 
   // POST /api/auth/register
   app.post("/api/auth/register", async (req: Request, res: Response) => {
-    const { email, password, name, gender } = req.body;
+    const { email, password, name, gender, dateOfBirth } = req.body;
 
     if (!email || !password) {
       res.status(400).json({ error: "Email and password are required" });
       return;
     }
 
-    if (password.length < 8) {
-      res.status(400).json({ error: "Password must be at least 8 characters" });
+    // ── Age gate (COPPA — under-13s may not self-register) ──────────────────
+    const ageError = validateAge(dateOfBirth);
+    if (ageError) {
+      res.status(400).json({ error: ageError });
+      return;
+    }
+
+    // ── Password strength (SOC 2 CC6.1, Essential 8) ────────────────────────
+    const strength = validatePasswordStrength(String(password));
+    if (!strength.valid) {
+      res.status(400).json({ error: strength.errors[0], errors: strength.errors });
       return;
     }
 
     try {
-      const existing = await db.getUserByEmail(email);
+      const existing = await db.getUserByEmail(String(email).toLowerCase().trim());
       if (existing) {
         res.status(409).json({ error: "An account with this email already exists" });
         return;
@@ -187,6 +263,7 @@ export function registerAuthRoutes(app: Express) {
         loginMethod: "email",
         role: isAdmin ? "admin" : "user",
         gender: validGenders.includes(gender) ? gender : "other",
+        dateOfBirth: String(dateOfBirth),
         lastSignedIn: new Date(),
       } as any);
 
@@ -200,13 +277,10 @@ export function registerAuthRoutes(app: Express) {
         { id: user.id, openId: user.openId, name: user.name },
         { expiresInMs: ONE_YEAR_MS }
       );
-
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
-
-      // Send welcome email (non-blocking — never delays registration response)
+      auditFromReq(req, "register.success", "auth", "success", user.id, { method: "email" });
       sendWelcomeEmail(user.email!, user.name || "").catch(() => {});
-
       res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
     } catch (error) {
       console.error("[Auth] Registration failed", error);
@@ -261,7 +335,7 @@ export function registerAuthRoutes(app: Express) {
     try {
       const user = await authService.authenticateRequest(req);
       if (!user) { res.status(401).json({ error: "Not authenticated" }); return; }
-      const { name, currentPassword, newPassword, newEmail, avatarUrl, bio, timezone, onboardingCompleted } = req.body;
+      const { name, currentPassword, newPassword, newEmail, avatarUrl, bio, timezone, onboardingCompleted, emailNotificationsEnabled, devotionPopupEnabled } = req.body;
       const dbUser = await db.getUserByOpenId(user.openId);
       if (!dbUser) { res.status(404).json({ error: "User not found" }); return; }
       const updates: Record<string, any> = { openId: user.openId };
@@ -270,6 +344,8 @@ export function registerAuthRoutes(app: Express) {
       if (bio !== undefined) updates.bio = bio.trim().slice(0, 280) || null;
       if (timezone !== undefined) updates.timezone = timezone;
       if (onboardingCompleted !== undefined) updates.onboardingCompleted = onboardingCompleted;
+      if (emailNotificationsEnabled !== undefined) updates.emailNotificationsEnabled = !!emailNotificationsEnabled;
+      if (devotionPopupEnabled !== undefined) updates.devotionPopupEnabled = !!devotionPopupEnabled;
       // ── Email change ────────────────────────────────────────────────────────
       if (newEmail) {
         if (!currentPassword) { res.status(400).json({ error: "Current password is required to change email" }); return; }
@@ -294,52 +370,264 @@ export function registerAuthRoutes(app: Express) {
       }
       await db.upsertUser(updates as any);
       const updated = await db.getUserByOpenId(user.openId);
-      res.json({ success: true, user: { id: updated?.id, name: updated?.name, email: updated?.email, avatarUrl: (updated as any)?.avatarUrl, bio: (updated as any)?.bio, timezone: (updated as any)?.timezone, onboardingCompleted: (updated as any)?.onboardingCompleted } });
+      res.json({ success: true, user: { id: updated?.id, name: updated?.name, email: updated?.email, avatarUrl: (updated as any)?.avatarUrl, bio: (updated as any)?.bio, timezone: (updated as any)?.timezone, onboardingCompleted: (updated as any)?.onboardingCompleted, emailNotificationsEnabled: (updated as any)?.emailNotificationsEnabled ?? true, devotionPopupEnabled: (updated as any)?.devotionPopupEnabled ?? true } });
     } catch (error) {
       console.error("[Auth] Profile update failed", error);
       res.status(500).json({ error: "Failed to update profile" });
     }
   });
 
+  // POST /api/auth/apple — Sign in with Apple (required by App Store Guideline 4.8
+  // whenever a third-party login like Google is offered)
+  app.post("/api/auth/apple", async (req: Request, res: Response) => {
+    const { identityToken, name, dateOfBirth } = req.body;
+    const clientId = process.env.APPLE_CLIENT_ID; // Services ID / bundle ID configured in Apple Developer
+
+    if (!clientId) {
+      res.status(503).json({ error: "Sign in with Apple is not configured yet" });
+      return;
+    }
+    if (!identityToken) {
+      res.status(400).json({ error: "Missing Apple identity token" });
+      return;
+    }
+
+    try {
+      const { payload } = await jwtVerify(String(identityToken), APPLE_JWKS, {
+        issuer: "https://appleid.apple.com",
+        audience: clientId,
+      });
+
+      const appleSub = payload.sub as string | undefined;
+      const appleEmail = (payload.email as string | undefined)?.toLowerCase();
+      if (!appleSub) {
+        res.status(400).json({ error: "Invalid Apple identity token" });
+        return;
+      }
+
+      let user = await db.getUserByAppleId(appleSub);
+
+      if (!user && appleEmail) {
+        // Link to an existing email/password account on first Apple sign-in
+        const existing = await db.getUserByEmail(appleEmail);
+        if (existing) {
+          await db.upsertUser({ openId: existing.openId, appleId: appleSub } as any);
+          user = await db.getUserByOpenId(existing.openId);
+        }
+      }
+
+      if (!user) {
+        // New account — Apple only sends `email`/name on the very first authorization
+        const ageError = validateAge(dateOfBirth);
+        if (ageError) {
+          res.status(400).json({ error: ageError });
+          return;
+        }
+        const openId = nanoid(21);
+        const isAdmin = !!(ENV.adminEmail && appleEmail && appleEmail === ENV.adminEmail.toLowerCase());
+        await db.upsertUser({
+          openId,
+          name: name || null,
+          email: appleEmail || null,
+          appleId: appleSub,
+          loginMethod: "apple",
+          role: isAdmin ? "admin" : "user",
+          dateOfBirth: dateOfBirth ? String(dateOfBirth) : undefined,
+          lastSignedIn: new Date(),
+        } as any);
+        user = await db.getUserByOpenId(openId);
+      }
+
+      if (!user) {
+        res.status(500).json({ error: "Failed to create or link account" });
+        return;
+      }
+
+      await db.upsertUser({ openId: user.openId, lastSignedIn: new Date() });
+
+      const sessionToken = await authService.createSessionToken(
+        { id: user.id, openId: user.openId, name: user.name },
+        { expiresInMs: ONE_YEAR_MS }
+      );
+      const cookieOptions = getSessionCookieOptions(req);
+      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+
+      auditFromReq(req, "login.success", "auth", "success", user.id, { method: "apple" });
+      res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
+    } catch (error) {
+      console.error("[Auth] Sign in with Apple failed", error);
+      auditFromReq(req, "login.failure", "auth", "failure", null, { method: "apple" });
+      res.status(401).json({ error: "Sign in with Apple failed" });
+    }
+  });
+
   // POST /api/auth/login
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     const { email, password } = req.body;
+    const ip = getClientIp(req);
 
     if (!email || !password) {
       res.status(400).json({ error: "Email and password are required" });
       return;
     }
 
+    // ── Account lockout check (Essential 8, SOC 2 CC6.2) ────────────────────
+    if (await isLockedOut(String(email), ip)) {
+      auditFromReq(req, "login.blocked", "auth", "blocked", null, { email: String(email).slice(0, 100) });
+      res.status(429).json({ error: "Too many failed attempts. Please wait 15 minutes and try again." });
+      return;
+    }
+
     try {
-      const user = await db.getUserByEmail(email.toLowerCase());
-      if (!user || !user.passwordHash) {
-        res.status(401).json({ error: "Invalid email or password" });
+      const user = await db.getUserByEmail(String(email).toLowerCase().trim());
+
+      // Always run bcrypt compare even when user not found — prevents timing attacks (OWASP A07)
+      const DUMMY_HASH = "$2b$12$LRkCmMeBnJFl.pVf4tE/ieANBxRV7OaEJbL4z5vXf7HrCDHFUQvMi";
+      const hashToCheck = user?.passwordHash ?? DUMMY_HASH;
+      const valid = await bcrypt.compare(String(password), hashToCheck);
+
+      if (!user || !user.passwordHash || !valid) {
+        const { locked, remaining } = await recordLoginAttempt(String(email), ip, false);
+        auditFromReq(req, "login.failure", "auth", "failure", user?.id ?? null, {
+          email: String(email).slice(0, 100),
+          locked,
+          remainingAttempts: remaining,
+        });
+        logSecurityEvent("login.failure", "failure", { email: String(email).slice(0, 100), ip });
+        const hint = locked ? " Account temporarily locked — try again in 15 minutes." : "";
+        res.status(401).json({ error: AUTH_ERR + hint });
         return;
       }
 
-      const valid = await bcrypt.compare(password, user.passwordHash);
-      if (!valid) {
-        res.status(401).json({ error: "Invalid email or password" });
-        return;
-      }
-
-      await db.upsertUser({
-        openId: user.openId,
-        lastSignedIn: new Date(),
-      });
+      await recordLoginAttempt(String(email), ip, true);
+      await db.upsertUser({ openId: user.openId, lastSignedIn: new Date() });
 
       const sessionToken = await authService.createSessionToken(
         { id: user.id, openId: user.openId, name: user.name },
         { expiresInMs: ONE_YEAR_MS }
       );
-
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
-
+      auditFromReq(req, "login.success", "auth", "success", user.id, { method: "email" });
       res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
     } catch (error) {
       console.error("[Auth] Login failed", error);
       res.status(500).json({ error: "Login failed" });
+    }
+  });
+
+  // POST /api/auth/verify-otp — complete login or registration after OTP verification
+  app.post("/api/auth/verify-otp", async (req: Request, res: Response) => {
+    const { email, code, type } = req.body;
+    if (!email || !code || !type) {
+      res.status(400).json({ error: "Email, code, and type are required" });
+      return;
+    }
+    if (type !== "login" && type !== "signup") {
+      res.status(400).json({ error: "Invalid type" });
+      return;
+    }
+    try {
+      const result = await db.verifyOtp(String(email).toLowerCase(), String(code), type as "login" | "signup");
+      if (!result.valid) {
+        res.status(401).json({ error: result.reason ?? "Invalid code" });
+        return;
+      }
+
+      const user = await db.getUserByEmail(String(email).toLowerCase());
+      if (!user) {
+        res.status(404).json({ error: "Account not found" });
+        return;
+      }
+
+      if (type === "login") {
+        await db.upsertUser({ openId: user.openId, lastSignedIn: new Date() });
+      } else {
+        // Registration: send welcome email now that email is verified
+        sendWelcomeEmail(user.email!, user.name || "").catch(() => {});
+      }
+
+      const sessionToken = await authService.createSessionToken(
+        { id: user.id, openId: user.openId, name: user.name },
+        { expiresInMs: ONE_YEAR_MS }
+      );
+      const cookieOptions = getSessionCookieOptions(req);
+      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+
+      auditFromReq(req, `${type}.success`, "auth", "success", user.id, { method: "email_otp" });
+      res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
+    } catch (error) {
+      console.error("[Auth] verify-otp failed:", error);
+      res.status(500).json({ error: "Verification failed" });
+    }
+  });
+
+  // POST /api/auth/resend-otp — generate and send a fresh OTP
+  app.post("/api/auth/resend-otp", async (req: Request, res: Response) => {
+    const { email, type } = req.body;
+    if (!email || (type !== "login" && type !== "signup")) {
+      res.status(400).json({ error: "Invalid request" });
+      return;
+    }
+    // Only resend if the account exists
+    const user = await db.getUserByEmail(String(email).toLowerCase());
+    if (!user) { res.json({ success: true }); return; } // silent for security
+    try {
+      const code = await db.createOtp(String(email).toLowerCase(), type as "login" | "signup");
+      sendOtpEmail(String(email).toLowerCase(), code, type as "login" | "signup").catch(() => {});
+      res.json({ success: true });
+    } catch (error) {
+      console.error("[Auth] resend-otp failed:", error);
+      res.status(500).json({ error: "Failed to send code" });
+    }
+  });
+
+  // DELETE /api/auth/account — Right to Erasure (GDPR Art. 17, App Store requirement)
+  app.delete("/api/auth/account", async (req: Request, res: Response) => {
+    try {
+      const user = await authService.authenticateRequest(req);
+      if (!user) { res.status(401).json({ error: "Not authenticated" }); return; }
+
+      const { password } = req.body;
+      const dbUser = await db.getUserByOpenId(user.openId);
+      if (!dbUser) { res.status(404).json({ error: "User not found" }); return; }
+
+      // Require password confirmation before erasure
+      if (dbUser.passwordHash) {
+        if (!password) { res.status(400).json({ error: "Password required to delete account" }); return; }
+        const valid = await bcrypt.compare(String(password), dbUser.passwordHash);
+        if (!valid) { res.status(401).json({ error: "Incorrect password" }); return; }
+      }
+
+      auditFromReq(req, "account.delete", "data", "success", dbUser.id, { email: dbUser.email });
+      await db.deleteUserData(dbUser.id);
+
+      // Clear session cookie
+      res.clearCookie(COOKIE_NAME);
+      res.json({ success: true, message: "Your account and all data have been permanently deleted." });
+    } catch (error) {
+      console.error("[Auth] Account deletion failed", error);
+      res.status(500).json({ error: "Account deletion failed" });
+    }
+  });
+
+  // GET /api/auth/export — Right to Data Portability (GDPR Art. 20, App Store requirement)
+  app.get("/api/auth/export", async (req: Request, res: Response) => {
+    try {
+      const user = await authService.authenticateRequest(req);
+      if (!user) { res.status(401).json({ error: "Not authenticated" }); return; }
+      const dbUser = await db.getUserByOpenId(user.openId);
+      if (!dbUser) { res.status(404).json({ error: "User not found" }); return; }
+
+      auditFromReq(req, "data.export", "data", "success", dbUser.id);
+      const data = await db.exportUserData(dbUser.id);
+
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="bdb-data-export-${new Date().toISOString().slice(0,10)}.json"`);
+      res.json(data);
+    } catch (error) {
+      console.error("[Auth] Data export failed", error);
+      res.status(500).json({ error: "Data export failed" });
     }
   });
 }

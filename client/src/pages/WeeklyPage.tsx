@@ -69,12 +69,18 @@ export default function WeeklyPage() {
   const [activeTab, setActiveTab] = useState(initialTab);
   // Re-sync if URL changes (e.g. navigating from Zion multiple times)
   useEffect(() => {
-    const t = new URLSearchParams(search).get("tab");
+    const params = new URLSearchParams(search);
+    const t = params.get("tab");
     if (t) setActiveTab(t);
+    const d = params.get("day");
+    if (d !== null) {
+      const idx = parseInt(d, 10);
+      if (!isNaN(idx) && idx >= 0 && idx <= 6) setActiveDay(idx);
+    }
   }, [search]);
 
   const { data: weekData } = trpc.weekly.get.useQuery({ year, weekNumber });
-  const { data: dailyDataArr } = trpc.daily.get.useQuery({ date: weekStartDate });
+  const { data: weekDailyData } = trpc.daily.getWeek.useQuery({ weekStartDate });
   const saveMutation = trpc.weekly.save.useMutation();
   const saveDailyMutation = trpc.daily.save.useMutation();
 
@@ -124,6 +130,27 @@ export default function WeeklyPage() {
     setWeekLocal({});
     setDailyLocal({});
   }, [year, weekNumber]);
+
+  // Populate dailyLocal from server data (runs once per week load when data arrives)
+  useEffect(() => {
+    if (!weekDailyData) return;
+    setDailyLocal(prev => {
+      const merged: Record<string, Record<string, any>> = { ...prev };
+      for (const [date, entry] of Object.entries(weekDailyData)) {
+        // Only seed from server if the user hasn't already edited this date locally
+        if (!merged[date]) {
+          merged[date] = {
+            topPriorities: (entry as any).topPriorities ?? ["", "", "", "", ""],
+            timeSlots: (entry as any).timeSlots ?? {},
+            gratitude: (entry as any).gratitude ?? ["", "", "", "", ""],
+            dailyWins: (entry as any).dailyWins ?? ["", "", "", "", ""],
+            waterGlasses: (entry as any).waterGlasses ?? 0,
+          };
+        }
+      }
+      return merged;
+    });
+  }, [weekDailyData]);
 
   function buildDefaultHabits() {
     const tracker: Record<string, any> = {};

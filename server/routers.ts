@@ -2,7 +2,8 @@ import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
+import { getGoogleRedirectUri } from "./_core/auth";
 import {
   getAnnualPlan,
   upsertAnnualPlan,
@@ -44,9 +45,6 @@ import {
   getNoteAttachments,
   addNoteAttachment,
   deleteNoteAttachment,
-  getZionHistory,
-  saveZionMessage,
-  clearZionHistory,
   getUserPlannerContext,
   getReminders,
   createReminder,
@@ -69,10 +67,17 @@ import {
   getUserPushSubscriptions,
   getUserByEmail,
   upsertUser,
+  getUserStreak,
+  getLastStreakNotification,
+  getZionMemory,
+  upsertZionMemory,
+  deleteZionMemory,
 } from "./db";
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 import { nanoid } from "nanoid";
+import { buildZionSystemPrompt } from "./zionPrompt";
+import { signOAuthState } from "./_core/tokenEncryption";
 
 // ─── Shared validators ────────────────────────────────────────────────────────
 const zYear = z.number().int().min(2020).max(2030);
@@ -254,6 +259,23 @@ const dailyRouter = router({
       return getDailyEntry(ctx.user.id, input.date);
     }),
 
+  // Returns all 7 daily entries for a week, keyed by date (YYYY-MM-DD)
+  getWeek: protectedProcedure
+    .input(z.object({ weekStartDate: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const { getDailyEntry: getEntry } = await import('./db');
+      const base = new Date(input.weekStartDate + 'T12:00:00');
+      const results: Record<string, any> = {};
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(base);
+        d.setDate(base.getDate() + i);
+        const dateStr = d.toISOString().slice(0, 10);
+        const entry = await getEntry(ctx.user.id, dateStr);
+        if (entry) results[dateStr] = entry;
+      }
+      return results;
+    }),
+
   listYear: protectedProcedure
     .input(z.object({ year: z.number() }))
     .query(async ({ ctx, input }) => {
@@ -419,23 +441,29 @@ const integrationsRouter = router({
     .input(z.object({
       slackWebhookUrl: z.string().optional(),
       slackChannelName: z.string().optional(),
+      slackBotToken: z.string().optional(),
+      slackReadChannelIds: z.string().optional(),
       googleCalendarId: z.string().optional(),
       googleAccessToken: z.string().optional(),
       googleRefreshToken: z.string().optional(),
       notionToken: z.string().optional(),
       notionDatabaseId: z.string().optional(),
+      boxAccessToken: z.string().optional(),
+      granolaApiKey: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       await upsertUserIntegrations(ctx.user.id, input);
       return { success: true };
     }),
   clear: protectedProcedure
-    .input(z.object({ field: z.enum(["slack", "google", "notion"]) }))
+    .input(z.object({ field: z.enum(["slack", "google", "notion", "box", "granola"]) }))
     .mutation(async ({ ctx, input }) => {
       const clearMap: Record<string, object> = {
-        slack: { slackWebhookUrl: null, slackChannelName: null },
+        slack: { slackWebhookUrl: null, slackChannelName: null, slackBotToken: null, slackReadChannelIds: null },
         google: { googleAccessToken: null, googleRefreshToken: null, googleCalendarId: null, googleTokenExpiry: null },
         notion: { notionToken: null, notionDatabaseId: null },
+        box: { boxAccessToken: null },
+        granola: { granolaApiKey: null },
       };
       await upsertUserIntegrations(ctx.user.id, clearMap[input.field] as any);
       return { success: true };
@@ -542,7 +570,7 @@ const socialAccountsRouter = router({
 
   getContentStrategy: protectedProcedure
     .input(z.object({
-      weeklyPosts: z.record(z.string()).optional(),
+      weeklyPosts: z.record(z.string(), z.string()).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const accounts = await getSocialAccounts(ctx.user.id);
@@ -569,7 +597,7 @@ const socialAccountsRouter = router({
 
       const postsSummary = input.weeklyPosts
         ? Object.entries(input.weeklyPosts)
-            .filter(([, v]) => v?.trim())
+            .filter(([, v]) => (v as string)?.trim())
             .map(([k, v]) => `- ${k}: ${v}`)
             .join("\n")
         : "No posts planned yet this week";
@@ -831,6 +859,64 @@ Generate a comprehensive Weekly Digest. Structure it as JSON with these exact fi
 // ─── Zion AI Chat Router ─────────────────────────────────────────────────────
 import { invokeLLM } from "./_core/llm";
 
+export interface ExtractedMemoryItem {
+  category: "preference" | "pattern" | "insight" | "fact";
+  key: string;
+  value: string;
+}
+
+/**
+ * Runs after every Zion exchange — extracts memorable facts about the user.
+ * Privacy note: this function does NOT persist anything server-side. The
+ * conversation snippet is sent to the LLM purely in-memory for this one
+ * request/response cycle, and the extracted facts are returned to the caller
+ * so the CLIENT can store them locally (IndexedDB) — nothing is written to
+ * our database. Errors are swallowed; memory extraction should never affect UX.
+ */
+export async function extractMemories(userMsg: string, assistantMsg: string): Promise<ExtractedMemoryItem[]> {
+  try {
+    const { invokeLLM: llm } = await import("./_core/llm");
+    const result = await llm({
+      max_tokens: 300,
+      messages: [{
+        role: "user",
+        content: `You are a memory extractor for Zion, a wellness AI assistant.
+Read this conversation snippet and identify facts worth remembering about the user — their preferences, habits, patterns, and personality traits.
+Return a JSON array of objects: [{"category": "preference"|"pattern"|"insight"|"fact", "key": "<short_identifier>", "value": "<what_to_remember>"}]
+Rules:
+- Only extract genuinely specific and useful facts (not generic things)
+- Max 3 items per call
+- If nothing memorable, return []
+- Keys should be short snake_case identifiers (e.g. "prefers_morning_workouts", "avoids_admin_tasks")
+
+USER: ${userMsg.slice(0, 400)}
+ASSISTANT: ${assistantMsg.slice(0, 400)}`
+      }],
+    });
+
+    const raw = result.choices?.[0]?.message?.content;
+    if (typeof raw !== "string") return [];
+
+    // Extract JSON from the response (may be wrapped in markdown)
+    const jsonMatch = raw.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
+
+    const items = JSON.parse(jsonMatch[0]) as Array<{ category: string; key: string; value: string }>;
+    if (!Array.isArray(items)) return [];
+
+    const validCategories = ["preference", "pattern", "insight", "fact"];
+    return items.slice(0, 3)
+      .filter(item => item.key && item.value && typeof item.key === "string" && typeof item.value === "string")
+      .map(item => ({
+        category: (validCategories.includes(item.category) ? item.category : "fact") as ExtractedMemoryItem["category"],
+        key: item.key.slice(0, 200),
+        value: item.value.slice(0, 500),
+      }));
+  } catch {
+    return [];
+  }
+}
+
 const zionRouter = router({
 
   // ── Daily personalised greeting ───────────────────────────────────────────
@@ -911,180 +997,55 @@ Rules:
     };
   }),
 
-  history: protectedProcedure.query(async ({ ctx }) => {
-    return getZionHistory(ctx.user.id, 60);
-  }),
+  history: protectedProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(500).optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const { getZionHistory: _getHistory } = await import('./db');
+      return _getHistory(ctx.user.id, input?.limit ?? 100);
+    }),
 
   clearHistory: protectedProcedure.mutation(async ({ ctx }) => {
-    await clearZionHistory(ctx.user.id);
+    const { clearZionHistory: _clearHistory } = await import('./db');
+    await _clearHistory(ctx.user.id);
     return { success: true };
   }),
+
+  getMemories: protectedProcedure.query(async ({ ctx }) => {
+    return getZionMemory(ctx.user.id);
+  }),
+
+  deleteMemory: protectedProcedure
+    .input(z.object({ keyName: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await deleteZionMemory(ctx.user.id, input.keyName);
+      return { success: true };
+    }),
 
   chat: protectedProcedure
     .input(z.object({
       message: z.string().min(1).max(10000),
       isVoice: z.boolean().optional().default(false),
+      // Client sends its own history and memory so the server never needs to
+      // read from the database for personalisation data — it's all ephemeral.
+      history: z.array(z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string().max(8000),
+      })).max(32).optional().default([]),
+      memoryContext: z.string().max(4000).optional().default(""),
     }))
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.user.id;
 
-      // Save the user message
-      await saveZionMessage({ userId, role: "user", content: input.message, metadata: input.isVoice ? JSON.stringify({ isVoice: true }) : null });
-
-      // Get rich planner context
+      // Get rich planner context (non-conversation; stays server-side for multi-device sync)
       const context = await getUserPlannerContext(userId);
-      const history = await getZionHistory(userId, 20);
+      const history = input.history;
 
-      // ── Build rich context strings ────────────────────────────────────────
-      const today = context.now.toISOString().slice(0, 10);
-      const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const systemPrompt = buildZionSystemPrompt(context, input.memoryContext ?? '');
 
-      const goalsContext = context.bigGoals.length
-        ? context.bigGoals.map(g => `  • Goal ${g.position}: ${g.title || '(untitled)'}${g.description ? ` — ${g.description}` : ''}${Array.isArray(g.steps) && g.steps.filter(Boolean).length ? `\n    Steps: ${(g.steps as string[]).filter(Boolean).join(', ')}` : ''}`).join('\n')
-        : '  (No annual goals set yet)';
-
-      const monthlyContext = context.allMonthlyPlans.length
-        ? context.allMonthlyPlans.map(m => {
-            const parts = [];
-            if (m.themeWord) parts.push(`Theme: ${m.themeWord}`);
-            if (m.businessCareerGoals) parts.push(`Business goals: ${m.businessCareerGoals}`);
-            if (m.wellnessGoals) parts.push(`Wellness goals: ${m.wellnessGoals}`);
-            if (m.winsOfWeek) parts.push(`Wins: ${m.winsOfWeek}`);
-            return parts.length ? `  ${monthNames[m.month-1]}: ${parts.join(' | ')}` : null;
-          }).filter(Boolean).join('\n')
-        : '  (No monthly plans logged yet)';
-
-      const weeklyContext = context.weeklyPlan ? [
-        context.weeklyPlan.wordOfWeek && `Word of week: ${context.weeklyPlan.wordOfWeek}`,
-        context.weeklyPlan.weekIntentions && `Intentions: ${context.weeklyPlan.weekIntentions}`,
-        context.weeklyPlan.topBusinessGoals && `Business goals: ${context.weeklyPlan.topBusinessGoals}`,
-        context.weeklyPlan.winsOfWeek && `Wins: ${context.weeklyPlan.winsOfWeek}`,
-        context.weeklyPlan.moneyEarned && `Money earned: ${context.weeklyPlan.moneyEarned}`,
-        context.weeklyPlan.moneySpent && `Money spent: ${context.weeklyPlan.moneySpent}`,
-        context.weeklyPlan.habitTracker && (() => {
-          const ht = context.weeklyPlan!.habitTracker as any;
-          const habits = [];
-          const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-          for (const [key, val] of Object.entries(ht || {})) {
-            if (!val) continue;
-            const v = val as any;
-            const name = v.name || key;
-            const completed = Array.isArray(v.days) ? v.days.filter(Boolean).length : (Array.isArray(val) ? (val as boolean[]).filter(Boolean).length : 0);
-            habits.push(`${name}: ${completed}/7 days`);
-          }
-          return habits.length ? `Habits this week: ${habits.join(', ')}` : null;
-        })(),
-      ].filter(Boolean).join('\n  ') : '  (No weekly plan for this week yet)';
-
-      const dailyContext = context.recentDailyEntries.length
-        ? context.recentDailyEntries.map(d => {
-            const slots = d.timeSlots as Record<string, string> | null;
-            const priorities = d.topPriorities as string[] | null;
-            const parts = [];
-            if (priorities?.filter(Boolean).length) parts.push(`priorities: ${priorities.filter(Boolean).join(', ')}`);
-            if (slots) {
-              const events = Object.entries(slots).filter(([,v]) => v).map(([k,v]) => `${k} ${v}`).join(', ');
-              if (events) parts.push(`schedule: ${events}`);
-            }
-            return parts.length ? `  ${d.date}: ${parts.join(' | ')}` : null;
-          }).filter(Boolean).join('\n')
-        : '  (No daily entries in the past 7 days)';
-
-      const remindersContext = context.upcomingReminders.length
-        ? context.upcomingReminders.map(r => `  • ${r.date} at ${r.timeSlot || '?'}: ${r.title}`).join('\n')
-        : '  (No upcoming reminders)';
-
-      const notesContext = context.recentNotes.length
-        ? context.recentNotes.map(n => `  • [${n.folder || 'General'}] ${n.title}: ${(n.content || '').slice(0, 100)}`).join('\n')
-        : '  (No notes yet)';
-
-      const systemPrompt = `You are Zion, a warm, encouraging, and deeply intuitive AI wellness assistant for the Be Do Become Wellness platform by Leah Marville. You have FULL ACCESS to the user's planner data and must use it intelligently in every response.
-
-Today's date: ${today} (Week ${context.weekNumber} of ${context.year})
-
-## YOUR PERSONALITY
-- Warm, empathetic, and motivating — like a wise best friend who keeps you accountable
-- You speak with gentle authority and wisdom
-- You celebrate wins and reframe challenges as growth opportunities
-- You use the Be Do Become framework: who you're BEING, what you're DOING, and who you're BECOMING
-
-## FULL PLANNER DATA (use this to answer any question about the user's life, progress, and schedule)
-
-### ANNUAL BIG GOALS (${context.year})
-${goalsContext}
-
-### MONTHLY PROGRESS (all months logged this year)
-${monthlyContext}
-
-### THIS WEEK (Week ${context.weekNumber}, starting ${context.weekStartDate})
-${weeklyContext}
-
-### LAST 7 DAYS (daily schedule & priorities)
-${dailyContext}
-
-### UPCOMING REMINDERS
-${remindersContext}
-
-### RECENT NOTES
-${notesContext}
-
-## HOW TO USE THIS DATA
-
-**For "How is my year going?" or "Am I hitting my goals?":**
-Look at the Annual Big Goals above. Cross-reference with monthly business/wellness goals and wins logged. Give a specific, honest assessment per goal — celebrate progress, flag what's falling behind, suggest one action per lagging goal.
-
-**For "Summarize my week" or "How did my week go?":**
-Look at "This Week" and "Last 7 Days" above. Summarize: what was scheduled, what priorities were set, habits completed, wins logged, money tracked. Be specific — mention actual items from their data.
-
-**For "What do I have coming up?" or "What's on my calendar?":**
-Reference the Upcoming Reminders and recent daily schedule data. List items clearly by date/time.
-
-**For "What are my habits?" or habit check-ins:**
-Reference the habit tracker data in "This Week". Give completion rates and encouragement.
-
-## CRITICAL RULE — PLANNER_ACTIONS
-Whenever the user shares ANY content that can be organized (goals, tasks, habits, events, reminders, ideas, wins, intentions), you MUST include a <PLANNER_ACTIONS> block at the END of your response. Do NOT ask for confirmation — just do it.
-
-For REMINDERS specifically: ALWAYS include BOTH a 'reminder' action (creates the reminder + adds to calendar) AND optionally a 'schedule' action if a specific day/time is given. The reminder type automatically populates the Reminders section AND the daily calendar.
-
-Response structure for brain dumps / action requests:
-1. Warm 1-2 sentence acknowledgment
-2. Structured summary (bullet points) of what you organised
-3. ONE thoughtful follow-up question
-4. PLANNER_ACTIONS block
-
-For pure questions (summaries, progress checks), respond directly with your analysis — no PLANNER_ACTIONS needed unless you spot something to add.
-
-<PLANNER_ACTIONS> block format (EXACT — valid JSON only, no extra text inside tags):
-<PLANNER_ACTIONS>
-{"actions":[{"type":"reminder","section":"reminders","content":"Go to the gym","reminderDate":"${today}","reminderTime":"18:00"},{"type":"schedule","section":"weekly","content":"Gym","day":"Today","time":"6:00 PM"}]}
-</PLANNER_ACTIONS>
-
-Valid action types:
-- reminder → Reminders list + daily calendar. Fields: content, reminderDate (YYYY-MM-DD), reminderTime (HH:MM)
-- schedule → Daily time slot. Fields: content, day ('Monday'…'Sunday'), time ('9:00 AM')
-- calendar → Calendar entry by date. Fields: content, reminderDate (YYYY-MM-DD), time (HH:MM)
-- goal → Annual Big Goals. Fields: content
-- monthly_goal → Monthly goals. Fields: content, field ('businessCareerGoals' or 'wellnessGoals')
-- priority → Daily top priorities. Fields: content, day
-- habit → Habit tracker. Fields: content (habit name)
-- intention → Weekly intentions. Fields: content
-- win → Weekly wins. Fields: content
-- budget → Monthly budget. Fields: content, budgetCategory ('savings','investment','living','personal','entertainment')
-- social_post → Social media posts. Fields: content, day, platform ('Instagram','TikTok','Twitter',etc.)
-- gratitude → Daily gratitude. Fields: content, day
-- note → Notes. Fields: content, folder ('Ideas','Work','Personal','Goals','Health')
-
-RULES:
-1. Use REAL content from the user's message — never placeholder text
-2. For reminders: reminderDate defaults to today (${today}) if not specified; reminderTime defaults to '09:00'
-3. Be generous — extract every actionable item
-4. Always reference actual planner data when answering questions about progress or schedule`;
-
-      // Build message history for context
+      // Build message history — client-supplied recent turns (already sliced client-side)
       const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
         { role: 'system', content: systemPrompt },
-        ...history.slice(-16).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+        ...history.map(m => ({ role: m.role, content: m.content })),
         { role: 'user', content: input.message },
       ];
 
@@ -1109,15 +1070,12 @@ RULES:
         displayContent = rawContent.replace(/<PLANNER_ACTIONS>[\s\S]*?<\/PLANNER_ACTIONS>/, '').trim();
       }
 
-      // Save assistant response
-      await saveZionMessage({
-        userId,
-        role: 'assistant',
-        content: displayContent,
-        metadata: plannerActions.length > 0 ? JSON.stringify({ plannerActions }) : null,
-      });
+      // ── Memory extraction — returns facts to the CLIENT to persist locally ──
+      // Nothing is written to the server database. The message content and any
+      // extracted facts only live in the user's IndexedDB from this point on.
+      const memoryUpdates = await extractMemories(input.message, displayContent);
 
-      return { content: displayContent, plannerActions };
+      return { content: displayContent, plannerActions, memoryUpdates };
     }),
 
   transcribeVoice: protectedProcedure
@@ -1297,6 +1255,11 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
         const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
         return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
       };
+      // Helper: 0=Mon … 6=Sun day index for a YYYY-MM-DD date
+      const dayIndexOf = (dateStr: string): number => {
+        const d = new Date(dateStr + 'T12:00:00');
+        return (d.getDay() + 6) % 7; // JS Sunday=0 → Mon=0,…Sun=6
+      };
       const weekNumber = input.weekNumber ?? getISOWeek(now);
       // Compute Monday of the current ISO week
       const getMondayOfWeek = (d: Date) => {
@@ -1372,7 +1335,7 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
           const currentSlot = timeSlots[timeKey] ?? '';
           timeSlots[timeKey] = currentSlot ? `${currentSlot}; ${input.content}` : input.content;
           await upsertDailyEntry(userId, targetDate, { timeSlots });
-          return { success: true, target: `Schedule — ${targetDate} at ${timeKey}`, navPath: `/weekly/${year}/${weekNumber}` };
+          return { success: true, target: `Schedule — ${targetDate} at ${timeKey}`, navPath: `/weekly/${year}/${weekNumber}?day=${dayIndexOf(targetDate)}` };
         }
 
         // ── Priority → daily_entries topPriorities ───────────────────────────
@@ -1382,7 +1345,7 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
           const priorities: string[] = (existing?.topPriorities as string[]) ?? [];
           if (priorities.length < 5) priorities.push(input.content);
           await upsertDailyEntry(userId, targetDate, { topPriorities: priorities });
-          return { success: true, target: `Top Priorities — ${targetDate}`, navPath: `/weekly/${year}/${weekNumber}` };
+          return { success: true, target: `Top Priorities — ${targetDate}`, navPath: `/weekly/${year}/${weekNumber}?day=${dayIndexOf(targetDate)}` };
         }
 
         // ── Habit → weekly_plans habitTracker ────────────────────────────────
@@ -1420,14 +1383,14 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
         // ── Reminder → reminders table (fires browser notification) ──────────────
         case 'reminder': {
           const { reminders: remindersTable } = await import('../drizzle/schema');
-          const db = await (await import('./db')).getDb();
-          if (!db) throw new Error('DB not available');
+          const dbConn = await (await import('./db')).getDb();
+          if (!dbConn) throw new Error('DB not available');
           // Parse the reminder date/time
           const rDate = input.reminderDate ?? todayDate;
           const rTime = input.reminderTime ?? (input.time ? normaliseTime(input.time) : '09:00');
           const [rHour, rMin] = rTime.split(':').map(Number);
           const reminderAt = new Date(`${rDate}T${rTime}:00`);
-          // Also write to daily schedule so it appears on the calendar
+          // Also write to daily schedule so it appears in the planner
           const existing = await getDailyEntry(userId, rDate);
           const timeSlots: Record<string, string> = (existing?.timeSlots as any) ?? {};
           const slotKey = `${String(rHour).padStart(2,'0')}:${String(rMin).padStart(2,'0')}`;
@@ -1435,7 +1398,7 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
           timeSlots[slotKey] = currentSlot ? `${currentSlot}; ⏰ ${input.content}` : `⏰ ${input.content}`;
           await upsertDailyEntry(userId, rDate, { timeSlots });
           // Insert reminder row
-          await db.insert(remindersTable).values({
+          await dbConn.insert(remindersTable).values({
             userId,
             title: input.content.slice(0, 512),
             reminderAt,
@@ -1445,20 +1408,74 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
             notifySlack: false,
             sent: false,
           });
-          return { success: true, target: `Reminder set for ${rDate} at ${rTime}`, navPath: `/weekly/${year}/${weekNumber}` };
+          // Push to Google Calendar if connected
+          try {
+            const integration = await getUserIntegrations(userId);
+            if (integration?.googleAccessToken) {
+              const { google } = await import('googleapis');
+              const oauth2Client = new (google.auth.OAuth2)(
+                process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, getGoogleRedirectUri()
+              );
+              oauth2Client.setCredentials({ access_token: integration.googleAccessToken, refresh_token: integration.googleRefreshToken ?? undefined });
+              const cal = google.calendar({ version: 'v3', auth: oauth2Client });
+              const endTime = `${String(rHour + (rMin + 30 >= 60 ? 1 : 0)).padStart(2,'0')}:${String((rMin + 30) % 60).padStart(2,'0')}`;
+              await cal.events.insert({
+                calendarId: integration.googleCalendarId ?? 'primary',
+                requestBody: {
+                  summary: input.content,
+                  start: { dateTime: `${rDate}T${slotKey}:00` },
+                  end:   { dateTime: `${rDate}T${endTime}:00` },
+                },
+              });
+            }
+          } catch (gcalErr) {
+            console.error('[Zion] Google Calendar push failed (reminder):', gcalErr);
+          }
+          // navPath: navigate to the week containing rDate
+          const rDateObj = new Date(rDate + 'T12:00:00');
+          const rWeek = getISOWeek(rDateObj);
+          const rYear = rDateObj.getFullYear();
+          return { success: true, target: `Reminder set for ${rDate} at ${rTime}`, navPath: `/weekly/${rYear}/${rWeek}?day=${dayIndexOf(rDate)}` };
         }
 
-        // ── Calendar (explicit date) → daily_entries timeSlots ─────────────────
+        // ── Calendar (explicit date) → daily_entries timeSlots + Google Calendar ─
         case 'calendar': {
-          // 'calendar' is like 'schedule' but uses reminderDate as the target date
           const targetDate = input.reminderDate ?? (input.day ? dayNameToDate(input.day) : todayDate);
           const existing = await getDailyEntry(userId, targetDate);
           const timeSlots: Record<string, string> = (existing?.timeSlots as any) ?? {};
-          const timeKey = input.time ? normaliseTime(input.time) : (input.reminderTime ?? '09:00');
+          const timeKey = input.time ? normaliseTime(input.time) : (input.reminderTime ? normaliseTime(input.reminderTime) : '09:00');
           const currentSlot = timeSlots[timeKey] ?? '';
           timeSlots[timeKey] = currentSlot ? `${currentSlot}; ${input.content}` : input.content;
           await upsertDailyEntry(userId, targetDate, { timeSlots });
-          return { success: true, target: `Calendar — ${targetDate} at ${timeKey}`, navPath: `/weekly/${year}/${weekNumber}` };
+          // Push to Google Calendar if connected
+          try {
+            const integration = await getUserIntegrations(userId);
+            if (integration?.googleAccessToken) {
+              const { google } = await import('googleapis');
+              const oauth2Client = new (google.auth.OAuth2)(
+                process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, getGoogleRedirectUri()
+              );
+              oauth2Client.setCredentials({ access_token: integration.googleAccessToken, refresh_token: integration.googleRefreshToken ?? undefined });
+              const cal = google.calendar({ version: 'v3', auth: oauth2Client });
+              const [tHour, tMin] = timeKey.split(':').map(Number);
+              const endTime = `${String(tHour + (tMin + 30 >= 60 ? 1 : 0)).padStart(2,'0')}:${String((tMin + 30) % 60).padStart(2,'0')}`;
+              await cal.events.insert({
+                calendarId: integration.googleCalendarId ?? 'primary',
+                requestBody: {
+                  summary: input.content,
+                  start: { dateTime: `${targetDate}T${timeKey}:00` },
+                  end:   { dateTime: `${targetDate}T${endTime}:00` },
+                },
+              });
+            }
+          } catch (gcalErr) {
+            console.error('[Zion] Google Calendar push failed (calendar):', gcalErr);
+          }
+          // navPath: navigate to the week containing targetDate
+          const tDateObj = new Date(targetDate + 'T12:00:00');
+          const tWeek = getISOWeek(tDateObj);
+          const tYear = tDateObj.getFullYear();
+          return { success: true, target: `Calendar — ${targetDate} at ${timeKey}`, navPath: `/weekly/${tYear}/${tWeek}?day=${dayIndexOf(targetDate)}` };
         }
 
         // ── Budget → monthly_plans financial fields ───────────────────────────
@@ -1540,124 +1557,376 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
       }
     }),
 
+  // ── Streak: how many consecutive days has the user shown up ──────────────
+  streak: protectedProcedure.query(async ({ ctx }) => {
+    return getUserStreak(ctx.user.id);
+  }),
+
+  // ── Check streak & send Zion miss-notification if broken ─────────────────
+  checkAndNotifyStreak: protectedProcedure.mutation(async ({ ctx }) => {
+    const streak = await getUserStreak(ctx.user.id);
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Only send a notification if the streak is broken AND we haven't sent one today
+    if (!streak.streakBroken) return { notified: false, streak };
+    const lastNotified = await getLastStreakNotification(ctx.user.id);
+    if (lastNotified === today) return { notified: false, streak };
+
+    // Build the encouragement message
+    const messages = [
+      `Hey, I noticed you missed a day — and that's okay. 💛 Every comeback is a story worth telling. Your streak is ready to be rebuilt, starting right now. What's one thing you want to get done today?`,
+      `Life happened — no judgment here. 🌱 The fact that you're back means everything. You don't need a perfect streak; you need a persistent one. Let's go again. What's on your mind today?`,
+      `Missed a day? No big deal — the work doesn't disappear, and neither does your potential. 🔥 The best thing you can do is show up today. Even 10 minutes counts. What would you like to tackle?`,
+    ];
+    const msg = messages[Math.floor(Math.random() * messages.length)];
+
+    // Return the message to the client to persist locally — server never stores it
+    return { notified: true, streak, notificationContent: `## Your streak was broken — but you're back! 💪\n\n${msg}` };
+  }),
+
   // ── Chief of Staff: structured daily briefing ────────────────────────────
   chiefOfStaff: protectedProcedure
-    .input(z.object({ date: zDate.optional(), includeEmails: z.boolean().optional() }))
+    .input(z.object({ date: zDate.optional() }))
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.user.id;
       const today = input.date ?? new Date().toISOString().slice(0, 10);
       const todayDate = new Date(today + "T12:00:00Z");
+      const tomorrowDate = new Date(todayDate); tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
       const dayNames = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
       const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
       const dayName = dayNames[todayDate.getUTCDay()];
       const dateLabel = `${dayName}, ${monthNames[todayDate.getUTCMonth()]} ${todayDate.getUTCDate()}, ${todayDate.getUTCFullYear()}`;
 
-      // Gather planner data
-      const context = await getUserPlannerContext(userId);
-      const todayEntry = context.recentDailyEntries.find((e: any) => e.date === today);
-      const upcomingReminders = context.upcomingReminders.slice(0, 5);
+      const [context, integration] = await Promise.all([
+        getUserPlannerContext(userId),
+        getUserIntegrations(userId),
+      ]);
 
-      // Weekly priorities & schedule
+      // ── Build planner context strings ─────────────────────────────────────
       const weeklyPlan = context.weeklyPlan as any;
       const priorities: string[] = [];
       const schedule: string[] = [];
       if (weeklyPlan) {
         const dayKey = dayName.toLowerCase();
         const slots = weeklyPlan[dayKey] ?? {};
-        Object.entries(slots).forEach(([time, val]: any) => {
-          if (val?.name) schedule.push(`${time}: ${val.name}`);
-        });
-        const weekPriorities = weeklyPlan.priorities ?? [];
-        weekPriorities.slice(0, 3).forEach((p: any) => {
-          if (p?.text) priorities.push(p.text);
-        });
+        Object.entries(slots).forEach(([time, val]: any) => { if (val?.name) schedule.push(`${time}: ${val.name}`); });
+        (weeklyPlan.priorities ?? []).slice(0, 3).forEach((p: any) => { if (p?.text) priorities.push(p.text); });
       }
+      const bigGoals = (context.bigGoals as any[]).slice(0, 5).map((g: any) => g.title).filter(Boolean);
+      const reminderLines = context.upcomingReminders.slice(0, 5)
+        .map((r: any) => `- ${r.title}${r.date ? ` (${r.date})` : ""}`)
+        .join("\n") || "None";
 
-      // Today's tasks from daily entry
-      const todayTasks: string[] = [];
-      if (todayEntry) {
-        const tasks = (todayEntry as any).tasks ?? [];
-        tasks.slice(0, 5).forEach((t: any) => { if (t?.text) todayTasks.push(t.text); });
-      }
+      // ── Integration fetches (all best-effort, parallel) ───────────────────
+      type GmailItem = { from: string; subject: string; isDraft?: boolean };
+      type CalendarEvent = { title: string; start: string; end?: string };
+      type SlackMessage = { channel: string; user: string; text: string };
+      type NotionPage = { title: string; url: string; lastEdited: string };
+      type BoxFile = { name: string; path: string; modified: string };
 
-      // Optionally fetch emails
-      let emailContext = "";
-      if (input.includeEmails) {
+      let gmailItems: GmailItem[] = [];
+      let calendarEvents: CalendarEvent[] = [];
+      let granolaItems: GmailItem[] = [];
+      let slackMessages: SlackMessage[] = [];
+      let notionPages: NotionPage[] = [];
+      let boxFiles: BoxFile[] = [];
+
+      const hasCalendar = !!(integration?.googleAccessToken);
+      const hasGmailDedicated = !!(integration as any)?.gmailAccessToken;
+
+      let calendarOAuth2: any = null;
+      if (hasCalendar) {
         try {
-          const integration = await getUserIntegrations(userId);
-          if (integration?.gmailEnabled && integration.googleAccessToken) {
+          const { google } = await import("googleapis");
+          calendarOAuth2 = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            getGoogleRedirectUri(),
+          );
+          calendarOAuth2.setCredentials({
+            access_token: integration!.googleAccessToken,
+            refresh_token: integration!.googleRefreshToken ?? undefined,
+          });
+        } catch { calendarOAuth2 = null; }
+      }
+
+      let gmailOAuth2: any = null;
+      if (hasGmailDedicated) {
+        try {
+          const { google } = await import("googleapis");
+          gmailOAuth2 = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            getGoogleRedirectUri(),
+          );
+          gmailOAuth2.setCredentials({
+            access_token: (integration as any).gmailAccessToken,
+            refresh_token: (integration as any).gmailRefreshToken ?? undefined,
+          });
+        } catch { gmailOAuth2 = null; }
+      }
+
+      await Promise.all([
+        // 📪 Gmail — unread important emails from last 48h
+        (async () => {
+          if (!gmailOAuth2) return;
+          try {
             const { google } = await import("googleapis");
-            const oauth2Client = new google.auth.OAuth2(
-              process.env.GOOGLE_CLIENT_ID,
-              process.env.GOOGLE_CLIENT_SECRET,
-              process.env.GOOGLE_REDIRECT_URI
-            );
-            oauth2Client.setCredentials({
-              access_token: integration.googleAccessToken,
-              refresh_token: integration.googleRefreshToken ?? undefined,
-            });
-            const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-            const nextDay = new Date(todayDate); nextDay.setUTCDate(nextDay.getUTCDate() + 1);
-            const q = `after:${today.replace(/-/g, "/")} before:${nextDay.toISOString().slice(0,10).replace(/-/g,"/")} -category:promotions -category:social`;
-            const listRes = await gmail.users.messages.list({ userId: "me", q, maxResults: 10 });
+            const gmail = google.gmail({ version: "v1", auth: gmailOAuth2 });
+            const q = `is:unread -category:promotions -category:social newer_than:2d`;
+            const listRes = await gmail.users.messages.list({ userId: "me", q, maxResults: 12 });
             const msgs = listRes.data.messages ?? [];
-            if (msgs.length > 0) {
-              const details = await Promise.all(msgs.slice(0, 8).map(async (m) => {
+            if (msgs.length === 0) return;
+            const details = await Promise.all(msgs.slice(0, 10).map(async (m) => {
+              try {
+                const d = await gmail.users.messages.get({ userId: "me", id: m.id!, format: "metadata", metadataHeaders: ["Subject","From"] });
+                const h = d.data.payload?.headers ?? [];
+                return {
+                  from: h.find((x: any) => x.name === "From")?.value ?? "Unknown",
+                  subject: h.find((x: any) => x.name === "Subject")?.value ?? "(no subject)",
+                };
+              } catch { return null; }
+            }));
+            gmailItems = details.filter(Boolean) as GmailItem[];
+
+            // Granola detection — emails from granola.ai or with meeting-notes subjects
+            const granolaQ = `from:team@granola.ai OR subject:"Meeting Notes:" newer_than:7d`;
+            const granolaRes = await gmail.users.messages.list({ userId: "me", q: granolaQ, maxResults: 5 });
+            const granolaM = granolaRes.data.messages ?? [];
+            if (granolaM.length > 0) {
+              const gd = await Promise.all(granolaM.map(async (m) => {
                 try {
-                  const d = await gmail.users.messages.get({ userId: "me", id: m.id!, format: "metadata", metadataHeaders: ["Subject","From"] });
+                  const d = await gmail.users.messages.get({ userId: "me", id: m.id!, format: "metadata", metadataHeaders: ["Subject","From","Date"] });
                   const h = d.data.payload?.headers ?? [];
-                  return `- ${h.find((x:any) => x.name==="From")?.value ?? "?"}: ${h.find((x:any) => x.name==="Subject")?.value ?? "(no subject)"}`;
+                  return {
+                    from: h.find((x: any) => x.name === "From")?.value ?? "Granola",
+                    subject: h.find((x: any) => x.name === "Subject")?.value ?? "Meeting Notes",
+                  };
                 } catch { return null; }
               }));
-              emailContext = `\n\nEmails today (${msgs.length}):\n${details.filter(Boolean).join("\n")}`;
+              granolaItems = gd.filter(Boolean) as GmailItem[];
             }
-          }
-        } catch { /* email fetch is best-effort */ }
-      }
+          } catch { /* best-effort */ }
+        })(),
 
-      // Build AI prompt
-      const bigGoals = (context.bigGoals as any[]).slice(0, 5).map((g: any) => g.title).filter(Boolean);
-      const reminderLines = upcomingReminders.map((r: any) => `- ${r.title}${r.reminderAt ? ` (${new Date(r.reminderAt).toLocaleDateString()})` : ""}`).join("\n");
+        // 📅 Google Calendar — next 48h events
+        (async () => {
+          if (!calendarOAuth2) return;
+          try {
+            const { google } = await import("googleapis");
+            const cal = google.calendar({ version: "v3", auth: calendarOAuth2 });
+            const calId = integration?.googleCalendarId || "primary";
+            const eventsRes = await cal.events.list({
+              calendarId: calId,
+              timeMin: todayDate.toISOString(),
+              timeMax: new Date(todayDate.getTime() + 48 * 3600 * 1000).toISOString(),
+              singleEvents: true,
+              orderBy: "startTime",
+              maxResults: 10,
+            });
+            calendarEvents = (eventsRes.data.items ?? []).map((e: any) => ({
+              title: e.summary ?? "Untitled event",
+              start: e.start?.dateTime ?? e.start?.date ?? "",
+              end: e.end?.dateTime ?? e.end?.date,
+            }));
+          } catch { /* best-effort */ }
+        })(),
 
-      const prompt = `You are Zion, acting as an elite Chief of Staff giving a sharp, warm morning briefing.
+        // 💬 Slack — unread DMs and @mentions via bot token
+        (async () => {
+          if (!integration?.slackBotToken) return;
+          try {
+            const token = integration.slackBotToken;
+            const channelIds: string[] = integration.slackReadChannelIds
+              ? JSON.parse(integration.slackReadChannelIds)
+              : [];
+
+            // Fetch auth to get bot user ID
+            const authRes = await fetch("https://slack.com/api/auth.test", {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            const authData = (await authRes.json()) as any;
+            const botUserId = authData.user_id as string | undefined;
+
+            // Use conversations.list to get DM channels if no explicit channels set
+            if (channelIds.length === 0) {
+              const listRes = await fetch("https://slack.com/api/conversations.list?types=im&limit=10", {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              const listData = (await listRes.json()) as any;
+              ((listData.channels ?? []) as any[]).forEach((c: any) => channelIds.push(c.id));
+            }
+
+            const oldest = String(Math.floor((Date.now() - 24 * 3600 * 1000) / 1000));
+            const msgs: SlackMessage[] = [];
+            await Promise.all(channelIds.slice(0, 5).map(async (channelId) => {
+              try {
+                const histRes = await fetch(
+                  `https://slack.com/api/conversations.history?channel=${channelId}&oldest=${oldest}&limit=20`,
+                  { headers: { Authorization: `Bearer ${token}` } },
+                );
+                const histData = (await histRes.json()) as any;
+                ((histData.messages ?? []) as any[]).forEach((m: any) => {
+                  if (m.bot_id) return; // skip bot messages
+                  const isMention = botUserId && m.text?.includes(`<@${botUserId}>`);
+                  const isDM = true;
+                  if (isMention || isDM) {
+                    msgs.push({ channel: channelId, user: m.user ?? "unknown", text: (m.text ?? "").slice(0, 200) });
+                  }
+                });
+              } catch { /* channel failed */ }
+            }));
+            slackMessages = msgs.slice(0, 8);
+          } catch { /* best-effort */ }
+        })(),
+
+        // 📒 Notion — recently modified pages
+        (async () => {
+          if (!integration?.notionToken) return;
+          try {
+            const dbId = integration.notionDatabaseId;
+            if (!dbId) return;
+            const body: Record<string, unknown> = {
+              sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
+              page_size: 8,
+            };
+            const res = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${integration.notionToken}`,
+                "Notion-Version": "2022-06-28",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(body),
+            });
+            const data = (await res.json()) as any;
+            notionPages = ((data.results ?? []) as any[]).slice(0, 6).map((p: any) => {
+              const titleProp = Object.values(p.properties ?? {}).find((v: any) => v.type === "title") as any;
+              const title = titleProp?.title?.[0]?.plain_text ?? "Untitled";
+              return {
+                title,
+                url: p.url ?? "",
+                lastEdited: p.last_edited_time ?? "",
+              };
+            });
+          } catch { /* best-effort */ }
+        })(),
+
+        // 📦 Box — recently modified files
+        (async () => {
+          if (!integration?.boxAccessToken) return;
+          try {
+            const res = await fetch("https://api.box.com/2.0/search?query=*&sort=modified_at&direction=DESC&limit=8&type=file", {
+              headers: { Authorization: `Bearer ${integration.boxAccessToken}` },
+            });
+            const data = (await res.json()) as any;
+            boxFiles = ((data.entries ?? []) as any[]).map((f: any) => ({
+              name: f.name ?? "Unknown",
+              path: f.path_collection?.entries?.map((e: any) => e.name).join(" / ") ?? "",
+              modified: f.modified_at ?? "",
+            }));
+          } catch { /* best-effort */ }
+        })(),
+      ]);
+
+      // ── Build three-section context for LLM ───────────────────────────────
+      const commsSection = [
+        gmailItems.length
+          ? `Gmail (${gmailItems.length} unread):\n${gmailItems.map(e => `  • From ${e.from}: ${e.subject}`).join("\n")}`
+          : "Gmail: No unread emails",
+        slackMessages.length
+          ? `Slack (${slackMessages.length} messages):\n${slackMessages.map(m => `  • ${m.text}`).join("\n")}`
+          : integration?.slackBotToken ? "Slack: No new messages" : "Slack: Not connected",
+      ].join("\n\n");
+
+      const scheduleSection = [
+        calendarEvents.length
+          ? `Calendar (next 48h):\n${calendarEvents.map(e => {
+              const start = e.start ? new Date(e.start).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" }) : "";
+              return `  • ${start}: ${e.title}`;
+            }).join("\n")}`
+          : schedule.length
+            ? `Planner schedule:\n${schedule.map(s => `  • ${s}`).join("\n")}`
+            : "Calendar: No upcoming events",
+        granolaItems.length
+          ? `Meeting Notes (Granola):\n${granolaItems.map(g => `  • ${g.subject}`).join("\n")}`
+          : "",
+      ].filter(Boolean).join("\n\n");
+
+      const docsSection = [
+        notionPages.length
+          ? `Notion (recent pages):\n${notionPages.map(p => `  • ${p.title}`).join("\n")}`
+          : integration?.notionToken ? "Notion: No recent pages" : "Notion: Not connected",
+        boxFiles.length
+          ? `Box (recent files):\n${boxFiles.map(f => `  • ${f.name}`).join("\n")}`
+          : integration?.boxAccessToken ? "Box: No recent files" : "Box: Not connected",
+      ].join("\n\n");
+
+      const prompt = `You are Zion, acting as an elite Chief of Staff giving a sharp, warm daily briefing.
 
 Today: ${dateLabel}
 Big Goals: ${bigGoals.join(", ") || "None set"}
-Today's schedule slots: ${schedule.length ? schedule.join(", ") : "No scheduled items"}
 Weekly priorities: ${priorities.length ? priorities.join(", ") : "None set"}
-Today's tasks: ${todayTasks.length ? todayTasks.join(", ") : "None set"}
-Upcoming reminders: ${reminderLines || "None"}${emailContext}
+Upcoming reminders: ${reminderLines}
 
-Write a structured briefing with these EXACT sections (use these exact headers):
+## 📪 COMMS (Gmail + Slack)
+${commsSection}
+
+## 📅 SCHEDULE (Calendar + Meeting Notes)
+${scheduleSection}
+
+## 📒 DOCS & PROJECTS (Notion + Box)
+${docsSection}
+
+Write a structured briefing with these EXACT sections:
 
 ## Good Morning
-One warm, motivating sentence personalized to today and what's on the schedule.
+One warm, energising sentence tailored to today's data.
+
+## 📪 Comms
+Top 3 follow-ups or replies needed from the emails/Slack above. If nothing urgent, say so briefly.
+
+## 📅 Schedule
+List today's calendar events or planner slots. Flag any conflicts or prep needed.
+
+## 📒 Docs & Projects
+Highlight any active Notion pages or Box files needing attention. If none connected, skip this section.
 
 ## Today's Focus
-3 bullet points — the most important things to accomplish today based on the data above.
-
-## Your Schedule
-List today's scheduled items. If empty, suggest 2-3 time blocks based on priorities.
-
-## On Your Radar
-Up to 3 upcoming reminders or important things to keep in mind this week.
+3 bullet-pointed priorities for today, combining planner goals + comms + calendar signals.
 
 ## Zion's Insight
-One strategic observation or encouragement based on the overall picture. Be specific, not generic.
+One sharp, specific strategic observation. Reference actual data. No platitudes.
 
-Keep each section tight — max 3-4 bullet points. Tone: warm, direct, executive.`;
+Tone: warm, direct, executive. Max 4 bullets per section.`;
 
       const { invokeLLM } = await import("./_core/llm");
-      const result = await invokeLLM({
-        model: "claude-opus-4-5",
-        max_tokens: 900,
-        messages: [{ role: "user", content: prompt }],
-      });
-
+      const result = await invokeLLM({ max_tokens: 1000, messages: [{ role: "user", content: prompt }] });
       const rawContent = result.choices?.[0]?.message?.content;
       const briefing = typeof rawContent === "string" ? rawContent : "Could not generate briefing.";
-      return { briefing, dateLabel, hasEmails: !!emailContext };
+
+      return {
+        briefing,
+        dateLabel,
+        integrations: {
+          hasGmail: !!gmailOAuth2,
+          hasCalendar: !!calendarOAuth2,
+          hasSlack: !!integration?.slackBotToken,
+          hasNotion: !!integration?.notionToken,
+          hasBox: !!integration?.boxAccessToken,
+          hasGranola: granolaItems.length > 0,
+          gmailCount: gmailItems.length,
+          calendarCount: calendarEvents.length,
+          slackCount: slackMessages.length,
+          notionCount: notionPages.length,
+          boxCount: boxFiles.length,
+          granolaCount: granolaItems.length,
+        },
+      };
     }),
+
+  // NOTE: getMemories and deleteMemory were removed — memory is now stored
+  // exclusively in the user's browser (IndexedDB) and never on the server.
 });
 
 // ─── Daily Devotion Router ──────────────────────────────────────────────────
@@ -1800,6 +2069,18 @@ Write a SHORT, powerful personal affirmation (1-2 sentences) inspired by this ve
 
     return { success: true };
   }),
+
+  getHistory: protectedProcedure.query(async ({ ctx }) => {
+    const { dailyDevotions } = await import('../drizzle/schema');
+    const { eq, desc } = await import('drizzle-orm');
+    const db = await (await import('./db')).getDb();
+    if (!db) return [];
+    const rows = await db.select().from(dailyDevotions)
+      .where(eq(dailyDevotions.userId, ctx.user.id))
+      .orderBy(desc(dailyDevotions.date))
+      .limit(365);
+    return rows;
+  }),
 });
 
 // ─── Reminders Router ─────────────────────────────────────────────────────────
@@ -1851,16 +2132,28 @@ const remindersRouter = router({
 });
 
 // ─── Slack Router ─────────────────────────────────────────────────────────────
+async function postToSlack(integration: { slackBotToken?: string | null; slackWebhookUrl?: string | null; slackChannelName?: string | null }, text: string) {
+  const { default: axios } = await import("axios");
+  const botToken = (integration as any).slackBotToken;
+  if (botToken) {
+    const channel = integration.slackChannelName || "#general";
+    const res = await axios.post("https://slack.com/api/chat.postMessage",
+      { channel, text },
+      { headers: { Authorization: `Bearer ${botToken}`, "Content-Type": "application/json" } },
+    );
+    if (!res.data.ok) throw new Error(`Slack API error: ${res.data.error ?? "unknown"}`);
+  } else if (integration.slackWebhookUrl) {
+    await axios.post(integration.slackWebhookUrl, { text });
+  } else {
+    throw new Error("No Slack connection found. Add your Bot Token in Integrations.");
+  }
+}
+
 const slackRouter = router({
   testWebhook: protectedProcedure.mutation(async ({ ctx }) => {
     const integration = await getUserIntegrations(ctx.user.id);
-    if (!integration?.slackWebhookUrl) {
-      throw new Error("No Slack webhook URL configured. Please add it in Integrations.");
-    }
-    const { default: axios } = await import("axios");
-    await axios.post(integration.slackWebhookUrl, {
-      text: "✅ BDB Digital Wellness Planner — Slack integration test successful! Your notifications are working.",
-    });
+    if (!integration) throw new Error("No Slack connection found. Add your Bot Token in Integrations.");
+    await postToSlack(integration as any, "✅ BDB Planner — Slack integration test successful! Chief of Staff can now read your messages.");
     return { success: true };
   }),
 
@@ -1868,9 +2161,7 @@ const slackRouter = router({
     .input(z.object({ date: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const integration = await getUserIntegrations(ctx.user.id);
-      if (!integration?.slackWebhookUrl) {
-        throw new Error("No Slack webhook URL configured. Please add it in Integrations.");
-      }
+      if (!integration) throw new Error("No Slack connection found. Add your Bot Token in Integrations.");
 
       const daily = await getDailyEntry(ctx.user.id, input.date);
       const priorities: string[] = (daily?.topPriorities as string[] | null) ?? [];
@@ -1884,9 +2175,7 @@ const slackRouter = router({
         .join("\n") || "_No schedule entries_";
 
       const text = `📅 *BDB Daily Summary — ${input.date}*\n\n*Today's Top Priorities:*\n${priorityLines}\n\n*Today's Schedule:*\n${scheduleLines}`;
-
-      const { default: axios } = await import("axios");
-      await axios.post(integration.slackWebhookUrl, { text });
+      await postToSlack(integration as any, text);
       return { success: true };
     }),
 });
@@ -1897,7 +2186,7 @@ const googleCalendarRouter = router({
     const { google } = await import("googleapis");
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback";
+    const redirectUri = getGoogleRedirectUri();
 
     if (!clientId || !clientSecret) {
       throw new Error("Google OAuth credentials not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file.");
@@ -1905,14 +2194,13 @@ const googleCalendarRouter = router({
 
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
     // Encode userId in state so the callback can identify the user without relying on cookies
-    const state = Buffer.from(JSON.stringify({ userId: ctx.user.id })).toString("base64");
+    const state = signOAuthState({ userId: ctx.user.id });
     const url = oauth2Client.generateAuthUrl({
       access_type: "offline",
       scope: [
         "https://www.googleapis.com/auth/calendar.events",
-        "https://www.googleapis.com/auth/gmail.readonly",
       ],
-      prompt: "consent",
+      prompt: "select_account consent",
       state,
     });
     return { url };
@@ -1945,7 +2233,7 @@ const googleCalendarRouter = router({
       const { google } = await import("googleapis");
       const clientId = process.env.GOOGLE_CLIENT_ID;
       const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-      const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback";
+      const redirectUri = getGoogleRedirectUri();
 
       const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
       oauth2Client.setCredentials({
@@ -1987,10 +2275,117 @@ const gmailRouter = router({
   /** Whether this user has Gmail scope granted */
   status: protectedProcedure.query(async ({ ctx }) => {
     const integration = await getUserIntegrations(ctx.user.id);
+    const gmailConnected = !!(integration as any)?.gmailAccessToken;
     return {
-      connected: !!(integration?.googleAccessToken),
-      gmailEnabled: !!(integration as any)?.gmailEnabled,
+      connected: gmailConnected,
+      gmailEnabled: gmailConnected,
     };
+  }),
+
+  /** Diagnose Gmail OAuth configuration — shows what redirect URI is in use and tests the token */
+  diagnose: protectedProcedure.query(async ({ ctx }) => {
+    const redirectUri = getGoogleRedirectUri();
+    const credentialsSet = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+    const integration = await getUserIntegrations(ctx.user.id);
+    const hasToken = !!(integration as any)?.gmailAccessToken;
+    const hasCalendarToken = !!integration?.googleAccessToken;
+
+    let tokenTest: { ok: boolean; error?: string } | null = null;
+    if (hasToken) {
+      try {
+        const { google } = await import("googleapis");
+        const oauth2Client = new google.auth.OAuth2(
+          process.env.GOOGLE_CLIENT_ID,
+          process.env.GOOGLE_CLIENT_SECRET,
+          redirectUri,
+        );
+        oauth2Client.setCredentials({
+          access_token: (integration as any).gmailAccessToken,
+          refresh_token: (integration as any).gmailRefreshToken ?? undefined,
+        });
+        const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+        await gmail.users.getProfile({ userId: "me" });
+        tokenTest = { ok: true };
+      } catch (err: any) {
+        const msg: string = err?.message ?? String(err);
+        tokenTest = { ok: false, error: msg };
+      }
+    }
+
+    console.log(`[Gmail] diagnose for user ${ctx.user.id}: redirectUri=${redirectUri} creds=${credentialsSet} hasToken=${hasToken} tokenOk=${tokenTest?.ok}`);
+    return { redirectUri, credentialsSet, hasToken, hasCalendarToken, tokenTest };
+  }),
+
+  /** Generate a Gmail-only OAuth URL (requests only gmail.readonly + basic profile) */
+  getGmailAuthUrl: protectedProcedure.mutation(async ({ ctx }) => {
+    const { google } = await import("googleapis");
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = getGoogleRedirectUri();
+
+    console.log(`[Gmail] OAuth URL requested by user ${ctx.user.id}, redirectUri=${redirectUri}`);
+
+    if (!clientId || !clientSecret) {
+      throw new Error("Google OAuth credentials not configured on the server. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to your environment.");
+    }
+
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+    const state = signOAuthState({ userId: ctx.user.id, gmailOnly: true });
+    const url = oauth2Client.generateAuthUrl({
+      access_type: "offline",
+      scope: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/userinfo.email",
+      ],
+      prompt: "select_account consent",
+      state,
+    });
+    return { url };
+  }),
+
+  /** Fetch the last 5 email subjects to verify the connection is working */
+  testConnection: protectedProcedure.mutation(async ({ ctx }) => {
+    const integration = await getUserIntegrations(ctx.user.id);
+    const gmailToken = (integration as any)?.gmailAccessToken;
+    if (!gmailToken) throw new Error("Gmail not connected. Click Connect Gmail first.");
+
+    const { google } = await import("googleapis");
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      getGoogleRedirectUri(),
+    );
+    oauth2Client.setCredentials({
+      access_token: gmailToken,
+      refresh_token: (integration as any)?.gmailRefreshToken ?? undefined,
+    });
+
+    // Refresh token if expired
+    try {
+      const refreshed = await oauth2Client.getAccessToken();
+      if (refreshed.token && refreshed.token !== gmailToken) {
+        await upsertUserIntegrations(ctx.user.id, { gmailAccessToken: refreshed.token } as any);
+      }
+    } catch { /* token may still be valid */ }
+
+    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+    const listRes = await gmail.users.messages.list({
+      userId: "me",
+      q: "-category:promotions -category:social",
+      maxResults: 5,
+    });
+    const msgs = listRes.data.messages ?? [];
+    const subjects = await Promise.all(msgs.map(async (m) => {
+      try {
+        const d = await gmail.users.messages.get({ userId: "me", id: m.id!, format: "metadata", metadataHeaders: ["Subject", "From"] });
+        const h = d.data.payload?.headers ?? [];
+        return {
+          from: h.find((x: any) => x.name === "From")?.value ?? "Unknown",
+          subject: h.find((x: any) => x.name === "Subject")?.value ?? "(no subject)",
+        };
+      } catch { return null; }
+    }));
+    return { ok: true, recentEmails: subjects.filter(Boolean) };
   }),
 
   /** Fetch + AI-summarise today's emails */
@@ -1998,30 +2393,28 @@ const gmailRouter = router({
     .input(z.object({ date: z.string() })) // YYYY-MM-DD in user's local time
     .mutation(async ({ ctx, input }) => {
       const integration = await getUserIntegrations(ctx.user.id);
-      if (!integration?.googleAccessToken) {
-        throw new Error("Google account not connected. Connect it in Integrations.");
-      }
-      if (!(integration as any).gmailEnabled) {
-        throw new Error("Gmail access not yet granted. Re-authorize your Google account in Integrations to enable this.");
+      const gmailToken = (integration as any)?.gmailAccessToken;
+      if (!gmailToken) {
+        throw new Error("Gmail not connected. Go to Integrations and click Connect Gmail.");
       }
 
       const { google } = await import("googleapis");
       const clientId = process.env.GOOGLE_CLIENT_ID!;
       const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
-      const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/auth/google/callback";
+      const redirectUri = getGoogleRedirectUri();
 
       const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
       oauth2Client.setCredentials({
-        access_token: integration.googleAccessToken,
-        refresh_token: integration.googleRefreshToken ?? undefined,
-        expiry_date: integration.googleTokenExpiry ? integration.googleTokenExpiry.getTime() : undefined,
+        access_token: gmailToken,
+        refresh_token: (integration as any)?.gmailRefreshToken ?? undefined,
+        expiry_date: (integration as any)?.gmailTokenExpiry ? new Date((integration as any).gmailTokenExpiry).getTime() : undefined,
       });
 
       // Refresh token if needed
       try {
         const tokenInfo = await oauth2Client.getAccessToken();
-        if (tokenInfo.token && tokenInfo.token !== integration.googleAccessToken) {
-          await upsertUserIntegrations(ctx.user.id, { googleAccessToken: tokenInfo.token } as any);
+        if (tokenInfo.token && tokenInfo.token !== gmailToken) {
+          await upsertUserIntegrations(ctx.user.id, { gmailAccessToken: tokenInfo.token } as any);
         }
       } catch { /* token might still be valid */ }
 
@@ -2082,15 +2475,13 @@ const gmailRouter = router({
       const validEmails = emailDetails.filter(Boolean) as { subject: string; from: string; snippet: string }[];
 
       // Use Claude to summarise
-      const Anthropic = (await import("@anthropic-ai/sdk")).default;
-      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const { invokeLLM: invokeLLMGmail } = await import("./_core/llm");
 
       const emailsText = validEmails.map((e, i) =>
         `${i + 1}. From: ${e.from}\n   Subject: ${e.subject}\n   Preview: ${e.snippet}`
       ).join("\n\n");
 
-      const response = await anthropic.messages.create({
-        model: "claude-opus-4-5",
+      const gmailResult = await invokeLLMGmail({
         max_tokens: 800,
         messages: [{
           role: "user",
@@ -2100,7 +2491,8 @@ ${emailsText}`,
         }],
       });
 
-      const summary = response.content[0].type === "text" ? response.content[0].text : "Could not generate summary.";
+      const rawSummary = gmailResult.choices?.[0]?.message?.content;
+      const summary = typeof rawSummary === "string" && rawSummary ? rawSummary : "Could not generate summary.";
 
       return {
         summary,
@@ -2320,6 +2712,535 @@ const inviteRouter = router({
     }),
 });
 
+// ─── Security / Compliance Router ────────────────────────────────────────────
+const securityRouter = router({
+  /** Admin: view recent audit log entries */
+  auditLog: adminProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(500).default(100), category: z.enum(["auth","data","admin","security"]).optional() }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return [];
+      const conn = await pool.getConnection();
+      try {
+        const where = input.category ? "WHERE category = ?" : "";
+        const params: unknown[] = input.category ? [input.category, input.limit] : [input.limit];
+        const [rows] = await conn.query(
+          `SELECT id, userId, event, category, outcome, ip, userAgent, detail, requestId, createdAt
+           FROM \`audit_log\` ${where} ORDER BY createdAt DESC LIMIT ?`,
+          params
+        );
+        return rows as any[];
+      } finally { conn.release(); }
+    }),
+
+  /** Admin: view failed login summary for the last 24h */
+  loginAttempts: adminProcedure.query(async () => {
+    const { getPool } = await import("./db");
+    const pool = getPool();
+    if (!pool) return [];
+    const conn = await pool.getConnection();
+    try {
+      const [rows] = await conn.query(
+        `SELECT email, ip, COUNT(*) as attempts, MAX(createdAt) as lastAttempt
+         FROM \`login_attempts\`
+         WHERE success = 0 AND createdAt >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+         GROUP BY email, ip
+         ORDER BY attempts DESC
+         LIMIT 50`
+      );
+      return rows as any[];
+    } finally { conn.release(); }
+  }),
+});
+
+// ─── Subscription Router ──────────────────────────────────────────────────────
+const subscriptionRouter = router({
+  /** Current user's plan and status */
+  status: protectedProcedure.query(async ({ ctx }) => {
+    const { getUserById } = await import("./db");
+    const user = await getUserById(ctx.user.id) as any;
+    return {
+      plan: (user?.subscriptionPlan ?? "free") as string,
+      status: (user?.subscriptionStatus ?? "active") as string,
+      periodEnd: user?.subscriptionPeriodEnd ?? null,
+      stripeCustomerId: user?.stripeCustomerId ?? null,
+    };
+  }),
+
+  /** Create a Stripe Checkout session and return the URL */
+  createCheckout: protectedProcedure
+    .input(z.object({ planId: z.enum(["pro", "elite"]), successUrl: z.string(), cancelUrl: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { getStripe, PLANS, getOrCreateStripeCustomer } = await import("./_core/stripe");
+      const stripe = getStripe();
+      if (!stripe) throw new Error("Stripe is not configured on this server.");
+
+      const plan = PLANS[input.planId];
+      if (!plan.priceId) throw new Error(`Stripe price ID for ${input.planId} plan is not configured. Set STRIPE_${input.planId.toUpperCase()}_PRICE_ID in your environment.`);
+
+      const { getUserById } = await import("./db");
+      const user = await getUserById(ctx.user.id) as any;
+      if (!user?.email) throw new Error("Account email required for checkout.");
+
+      const customerId = await getOrCreateStripeCustomer(stripe, ctx.user.id, user.email, user.name);
+
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        mode: "subscription",
+        line_items: [{ price: plan.priceId, quantity: 1 }],
+        success_url: input.successUrl,
+        cancel_url: input.cancelUrl,
+        allow_promotion_codes: true,
+        billing_address_collection: "auto",
+        metadata: { userId: String(ctx.user.id), plan: input.planId },
+      });
+
+      return { url: session.url! };
+    }),
+
+  /** Create a Stripe Billing Portal session for managing/cancelling */
+  createPortal: protectedProcedure
+    .input(z.object({ returnUrl: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { getStripe } = await import("./_core/stripe");
+      const stripe = getStripe();
+      if (!stripe) throw new Error("Stripe is not configured.");
+
+      const { getUserById } = await import("./db");
+      const user = await getUserById(ctx.user.id) as any;
+      if (!user?.stripeCustomerId) throw new Error("No billing account found. Subscribe first.");
+
+      const session = await stripe.billingPortal.sessions.create({
+        customer: user.stripeCustomerId,
+        return_url: input.returnUrl,
+      });
+
+      return { url: session.url };
+    }),
+
+  /** Email today's Chief of Staff briefing to the user's inbox */
+  emailBriefing: protectedProcedure
+    .input(z.object({ briefing: z.string(), dateLabel: z.string(), attachFile: z.boolean().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const { getUserById } = await import("./db");
+      const user = await getUserById(ctx.user.id) as any;
+      if (!user?.email) throw new Error("No email address on your account.");
+      const { sendMorningBriefingEmail } = await import("./_core/email");
+      await sendMorningBriefingEmail(user.email, user.name ?? "there", input.briefing, input.dateLabel, input.attachFile ?? false);
+      return { ok: true };
+    }),
+});
+
+// ─── Admin Panel Router ───────────────────────────────────────────────────────
+const DEFAULT_PLAN_CONFIG = {
+  free:  { displayName: "Free",  monthlyPrice: 0,     zionMessageLimit: 10, features: ["Daily Bible Verse & Affirmation", "Annual, Monthly, Weekly & Daily Planner", "10 Zion AI messages/month", "Community access", "Progress tracking"] },
+  pro:   { displayName: "Pro",   monthlyPrice: 9.99,  zionMessageLimit: -1, features: ["Everything in Free", "Unlimited Zion AI messages", "Gmail & Calendar integrations", "Morning email briefing", "Streak reminders", "Priority support"] },
+  elite: { displayName: "Elite", monthlyPrice: 19.99, zionMessageLimit: -1, features: ["Everything in Pro", "Slack, Notion & Box integrations", "Chief of Staff AI briefing", "Advanced analytics", "1:1 onboarding call", "Early feature access"] },
+};
+
+async function getAdminConfig(key: string): Promise<Record<string, unknown> | null> {
+  const { getPool } = await import("./db");
+  const pool = getPool();
+  if (!pool) return null;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query("SELECT value FROM admin_config WHERE configKey = ?", [key]);
+    const row = (rows as any[])[0];
+    return row ? (typeof row.value === "string" ? JSON.parse(row.value) : row.value) : null;
+  } finally { conn.release(); }
+}
+
+async function setAdminConfig(key: string, value: Record<string, unknown>): Promise<void> {
+  const { getPool } = await import("./db");
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      "INSERT INTO admin_config (configKey, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)",
+      [key, JSON.stringify(value)]
+    );
+  } finally { conn.release(); }
+}
+
+const adminPanelRouter = router({
+  // ── Users ──────────────────────────────────────────────────────────────────
+  listUsers: adminProcedure
+    .input(z.object({
+      search: z.string().optional(),
+      plan: z.enum(["all", "free", "pro", "elite"]).default("all"),
+      role: z.enum(["all", "user", "admin"]).default("all"),
+      status: z.enum(["all", "active", "suspended"]).default("all"),
+      limit: z.number().int().min(1).max(100).default(50),
+      offset: z.number().int().min(0).default(0),
+      sortBy: z.enum(["createdAt", "lastSignedIn", "name"]).default("createdAt"),
+      sortDir: z.enum(["asc", "desc"]).default("desc"),
+    }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return { users: [], total: 0 };
+      const conn = await pool.getConnection();
+      try {
+        const conditions: string[] = ["u.anonymizedAt IS NULL"];
+        const params: unknown[] = [];
+        if (input.search) {
+          conditions.push("(u.name LIKE ? OR u.email LIKE ?)");
+          params.push(`%${input.search}%`, `%${input.search}%`);
+        }
+        if (input.plan !== "all") {
+          conditions.push("u.subscriptionPlan = ?");
+          params.push(input.plan);
+        }
+        if (input.role !== "all") {
+          conditions.push("u.role = ?");
+          params.push(input.role);
+        }
+        if (input.status === "active") {
+          conditions.push("(u.subscriptionStatus != 'suspended' OR u.subscriptionStatus IS NULL)");
+        } else if (input.status === "suspended") {
+          conditions.push("u.subscriptionStatus = 'suspended'");
+        }
+        const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+        const sortCol = input.sortBy === "name" ? "u.name" : input.sortBy === "lastSignedIn" ? "u.lastSignedIn" : "u.createdAt";
+        const [countRows] = await conn.query(`SELECT COUNT(*) as total FROM users u ${where}`, params);
+        const total = (countRows as any[])[0]?.total ?? 0;
+        const [rows] = await conn.query(
+          `SELECT u.id, u.name, u.email, u.role, u.subscriptionPlan, u.subscriptionStatus, u.createdAt, u.lastSignedIn, u.emailNotificationsEnabled,
+                  (SELECT COUNT(*) FROM daily_entries de WHERE de.userId = u.id) as entryCount,
+                  (SELECT COUNT(*) FROM daily_check_ins ci WHERE ci.userId = u.id) as checkInCount
+           FROM users u ${where}
+           ORDER BY ${sortCol} ${input.sortDir === "asc" ? "ASC" : "DESC"}
+           LIMIT ? OFFSET ?`,
+          [...params, input.limit, input.offset]
+        );
+        return { users: rows as any[], total };
+      } finally { conn.release(); }
+    }),
+
+  getUser: adminProcedure
+    .input(z.object({ userId: z.number().int() }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return null;
+      const conn = await pool.getConnection();
+      try {
+        const [rows] = await conn.query(
+          `SELECT u.id, u.name, u.email, u.role, u.subscriptionPlan, u.subscriptionStatus, u.subscriptionPeriodEnd,
+                  u.stripeCustomerId, u.stripeSubscriptionId, u.createdAt, u.lastSignedIn, u.loginMethod, u.timezone,
+                  u.emailNotificationsEnabled, u.devotionPopupEnabled, u.onboardingCompleted,
+                  (SELECT COUNT(*) FROM daily_entries de WHERE de.userId = u.id) as entryCount,
+                  (SELECT COUNT(*) FROM daily_check_ins ci WHERE ci.userId = u.id) as checkInCount,
+                  (SELECT COUNT(*) FROM zion_messages zm WHERE zm.userId = u.id AND zm.role = 'user') as zionCount,
+                  (SELECT COUNT(*) FROM daily_devotions dd WHERE dd.userId = u.id) as devotionCount,
+                  (SELECT COUNT(*) FROM notes n WHERE n.userId = u.id) as noteCount
+           FROM users u WHERE u.id = ?`,
+          [input.userId]
+        );
+        return (rows as any[])[0] ?? null;
+      } finally { conn.release(); }
+    }),
+
+  setPlan: adminProcedure
+    .input(z.object({ userId: z.number().int(), plan: z.enum(["free", "pro", "elite"]) }))
+    .mutation(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return;
+      const conn = await pool.getConnection();
+      try {
+        await conn.query("UPDATE users SET subscriptionPlan = ?, updatedAt = NOW() WHERE id = ?", [input.plan, input.userId]);
+      } finally { conn.release(); }
+    }),
+
+  setRole: adminProcedure
+    .input(z.object({ userId: z.number().int(), role: z.enum(["user", "admin"]) }))
+    .mutation(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return;
+      const conn = await pool.getConnection();
+      try {
+        await conn.query("UPDATE users SET role = ?, updatedAt = NOW() WHERE id = ?", [input.role, input.userId]);
+      } finally { conn.release(); }
+    }),
+
+  setSuspended: adminProcedure
+    .input(z.object({ userId: z.number().int(), suspended: z.boolean() }))
+    .mutation(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return;
+      const conn = await pool.getConnection();
+      try {
+        const status = input.suspended ? "suspended" : "active";
+        await conn.query("UPDATE users SET subscriptionStatus = ?, updatedAt = NOW() WHERE id = ?", [status, input.userId]);
+      } finally { conn.release(); }
+    }),
+
+  // ── Analytics ──────────────────────────────────────────────────────────────
+  overview: adminProcedure.query(async () => {
+    const { getPool } = await import("./db");
+    const pool = getPool();
+    if (!pool) return null;
+    const conn = await pool.getConnection();
+    try {
+      const [[stats]] = await conn.query(`
+        SELECT
+          COUNT(*) as totalUsers,
+          SUM(CASE WHEN lastSignedIn >= DATE_SUB(NOW(), INTERVAL 1 DAY)  THEN 1 ELSE 0 END) as activeToday,
+          SUM(CASE WHEN lastSignedIn >= DATE_SUB(NOW(), INTERVAL 7 DAY)  THEN 1 ELSE 0 END) as activeWeek,
+          SUM(CASE WHEN lastSignedIn >= DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) as activeMonth,
+          SUM(CASE WHEN createdAt >= DATE_SUB(NOW(), INTERVAL 7 DAY)     THEN 1 ELSE 0 END) as newThisWeek,
+          SUM(CASE WHEN createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)    THEN 1 ELSE 0 END) as newThisMonth,
+          SUM(CASE WHEN subscriptionPlan = 'free'  OR subscriptionPlan IS NULL THEN 1 ELSE 0 END) as freeCount,
+          SUM(CASE WHEN subscriptionPlan = 'pro'                                THEN 1 ELSE 0 END) as proCount,
+          SUM(CASE WHEN subscriptionPlan = 'elite'                              THEN 1 ELSE 0 END) as eliteCount,
+          SUM(CASE WHEN subscriptionStatus = 'suspended'                        THEN 1 ELSE 0 END) as suspendedCount,
+          SUM(CASE WHEN role = 'admin'                                           THEN 1 ELSE 0 END) as adminCount
+        FROM users WHERE anonymizedAt IS NULL
+      `) as any;
+      const [[activity]] = await conn.query(`
+        SELECT
+          (SELECT COUNT(*) FROM daily_entries  WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as entries30d,
+          (SELECT COUNT(*) FROM daily_check_ins WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as checkIns30d,
+          (SELECT COUNT(*) FROM zion_messages  WHERE role='user' AND createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as zionMsgs30d,
+          (SELECT COUNT(*) FROM daily_devotions WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as devotions30d,
+          (SELECT COUNT(*) FROM notes          WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)) as notes30d
+      `) as any;
+      const mrr = (Number(stats.proCount) * 9.99) + (Number(stats.eliteCount) * 19.99);
+      return { ...stats, ...activity, mrr: parseFloat(mrr.toFixed(2)), arr: parseFloat((mrr * 12).toFixed(2)) };
+    } finally { conn.release(); }
+  }),
+
+  userGrowth: adminProcedure
+    .input(z.object({ days: z.number().int().min(7).max(365).default(30) }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return [];
+      const conn = await pool.getConnection();
+      try {
+        const [rows] = await conn.query(
+          `SELECT DATE(createdAt) as date, COUNT(*) as count
+           FROM users WHERE createdAt >= DATE_SUB(NOW(), INTERVAL ? DAY) AND anonymizedAt IS NULL
+           GROUP BY DATE(createdAt) ORDER BY date ASC`,
+          [input.days]
+        );
+        const map = new Map((rows as any[]).map((r: any) => [r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date), Number(r.count)]));
+        const result: { date: string; count: number }[] = [];
+        for (let i = input.days - 1; i >= 0; i--) {
+          const d = new Date(); d.setDate(d.getDate() - i);
+          const key = d.toISOString().slice(0, 10);
+          result.push({ date: key, count: map.get(key) ?? 0 });
+        }
+        return result;
+      } finally { conn.release(); }
+    }),
+
+  topUsers: adminProcedure.query(async () => {
+    const { getPool } = await import("./db");
+    const pool = getPool();
+    if (!pool) return [];
+    const conn = await pool.getConnection();
+    try {
+      const [rows] = await conn.query(`
+        SELECT u.id, u.name, u.email, u.subscriptionPlan,
+               COUNT(DISTINCT ci.date) as checkInDays,
+               COUNT(DISTINCT de.date) as entryDays,
+               MAX(ci.createdAt) as lastCheckIn
+        FROM users u
+        LEFT JOIN daily_check_ins ci ON ci.userId = u.id AND ci.createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        LEFT JOIN daily_entries   de ON de.userId = u.id AND de.createdAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        WHERE u.anonymizedAt IS NULL
+        GROUP BY u.id ORDER BY (COUNT(DISTINCT ci.date) + COUNT(DISTINCT de.date)) DESC
+        LIMIT 20
+      `);
+      return rows as any[];
+    } finally { conn.release(); }
+  }),
+
+  // ── Plan Config ────────────────────────────────────────────────────────────
+  getPlanConfig: adminProcedure.query(async () => {
+    const saved = await getAdminConfig("plan_config");
+    if (saved) {
+      return { ...DEFAULT_PLAN_CONFIG, ...(saved as any) };
+    }
+    return DEFAULT_PLAN_CONFIG;
+  }),
+
+  updatePlanConfig: adminProcedure
+    .input(z.object({
+      planId: z.enum(["free", "pro", "elite"]),
+      displayName: z.string().min(1).max(64).optional(),
+      monthlyPrice: z.number().min(0).max(999).optional(),
+      zionMessageLimit: z.number().int().min(-1).max(100000).optional(),
+      features: z.array(z.string().max(200)).max(20).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      const current = await getAdminConfig("plan_config") ?? { ...DEFAULT_PLAN_CONFIG };
+      const plan = (current as any)[input.planId] ?? (DEFAULT_PLAN_CONFIG as any)[input.planId];
+      const updated = { ...plan };
+      if (input.displayName !== undefined) updated.displayName = input.displayName;
+      if (input.monthlyPrice !== undefined) updated.monthlyPrice = input.monthlyPrice;
+      if (input.zionMessageLimit !== undefined) updated.zionMessageLimit = input.zionMessageLimit;
+      if (input.features !== undefined) updated.features = input.features;
+      (current as any)[input.planId] = updated;
+      await setAdminConfig("plan_config", current as Record<string, unknown>);
+      return updated;
+    }),
+
+  // ── Broadcast ──────────────────────────────────────────────────────────────
+  broadcastEmail: adminProcedure
+    .input(z.object({
+      subject: z.string().min(1).max(256),
+      body: z.string().min(1).max(20000),
+      audience: z.enum(["all", "free", "pro", "elite"]).default("all"),
+    }))
+    .mutation(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) throw new Error("DB not available");
+      const conn = await pool.getConnection();
+      let recipients: Array<{ email: string; name: string | null }> = [];
+      try {
+        const planFilter = input.audience === "all" ? "" : "AND (subscriptionPlan = ?)";
+        const params: unknown[] = input.audience === "all" ? [] : [input.audience];
+        const [rows] = await conn.query(
+          `SELECT email, name FROM users WHERE anonymizedAt IS NULL AND emailNotificationsEnabled = 1 AND email IS NOT NULL ${planFilter} LIMIT 1000`,
+          params
+        );
+        recipients = rows as any[];
+      } finally { conn.release(); }
+
+      if (!process.env.RESEND_API_KEY) throw new Error("Email service not configured.");
+      const { Resend } = await import("resend");
+      const resend = new Resend(process.env.RESEND_API_KEY);
+      let sent = 0;
+      for (const r of recipients) {
+        try {
+          const html = `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:32px 24px">
+            <div style="background:#1a0d2e;color:#fff;padding:20px 24px;border-radius:12px 12px 0 0">
+              <span style="font-size:11px;letter-spacing:4px;opacity:.6">BE · DO · BECOME</span>
+            </div>
+            <div style="background:#fff;padding:24px;border:1px solid #e5e7eb;border-radius:0 0 12px 12px">
+              <p style="font-size:15px;color:#111;white-space:pre-wrap">${input.body.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>
+            </div>
+          </div>`;
+          await resend.emails.send({ from: "BDB Planner <hello@bedoBecome.app>", to: r.email!, subject: input.subject, html });
+          sent++;
+        } catch { /* skip failed */ }
+      }
+      return { sent, total: recipients.length };
+    }),
+
+  // ── System ─────────────────────────────────────────────────────────────────
+  schedulerJobs: adminProcedure.query(async () => {
+    const { getPool } = await import("./db");
+    const pool = getPool();
+    if (!pool) return [];
+    const conn = await pool.getConnection();
+    try {
+      const [rows] = await conn.query(`
+        SELECT jobType, MAX(sentAt) as lastRun, COUNT(*) as totalRuns,
+               COUNT(DISTINCT userId) as uniqueUsers,
+               MAX(DATE(sentAt)) as lastDate
+        FROM scheduler_log
+        WHERE sentAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        GROUP BY jobType ORDER BY lastRun DESC
+      `);
+      return rows as any[];
+    } finally { conn.release(); }
+  }),
+
+  recentAuditLog: adminProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(200).default(50), category: z.enum(["auth","data","admin","security","all"]).default("all") }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return [];
+      const conn = await pool.getConnection();
+      try {
+        const where = input.category !== "all" ? "WHERE category = ?" : "";
+        const params: unknown[] = input.category !== "all" ? [input.category, input.limit] : [input.limit];
+        const [rows] = await conn.query(
+          `SELECT id, userId, event, category, outcome, ip, detail, createdAt FROM audit_log ${where} ORDER BY createdAt DESC LIMIT ?`,
+          params
+        );
+        return rows as any[];
+      } finally { conn.release(); }
+    }),
+
+  dbStats: adminProcedure.query(async () => {
+    const { getPool } = await import("./db");
+    const pool = getPool();
+    if (!pool) return [];
+    const conn = await pool.getConnection();
+    try {
+      const tables = ["users","daily_entries","daily_check_ins","zion_messages","daily_devotions","notes","reminders","community_messages","audit_log","scheduler_log","zion_memory"];
+      const results: { table: string; rows: number }[] = [];
+      for (const t of tables) {
+        try {
+          const [[r]] = await conn.query(`SELECT COUNT(*) as cnt FROM \`${t}\``) as any;
+          results.push({ table: t, rows: Number(r?.cnt ?? 0) });
+        } catch { results.push({ table: t, rows: -1 }); }
+      }
+      return results;
+    } finally { conn.release(); }
+  }),
+
+  // ── User Deletion ──────────────────────────────────────────────────────────
+  deleteUser: adminProcedure
+    .input(z.object({ userId: z.number().int() }))
+    .mutation(async ({ input }) => {
+      const { deleteUserData } = await import("./db");
+      await deleteUserData(input.userId);
+      return { ok: true };
+    }),
+
+  // ── Community Moderation ───────────────────────────────────────────────────
+  listCommunityMessages: adminProcedure
+    .input(z.object({
+      limit: z.number().int().min(1).max(200).default(50),
+      beforeId: z.number().int().optional(),
+      showDeleted: z.boolean().default(true),
+      showFlagged: z.boolean().default(false),
+    }))
+    .query(async ({ input }) => {
+      const { getPool } = await import("./db");
+      const pool = getPool();
+      if (!pool) return [];
+      const conn = await pool.getConnection();
+      try {
+        const conditions: string[] = [];
+        if (input.beforeId) conditions.push(`m.id < ${Number(input.beforeId)}`);
+        if (input.showFlagged) conditions.push("m.flagCount > 0");
+        if (!input.showDeleted) conditions.push("(m.isDeleted = 0 AND m.deletedByAdmin = 0)");
+        const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+        const [rows] = await conn.query(
+          `SELECT m.id, m.userId, m.content, m.isDeleted, m.deletedByAdmin, m.flagCount, m.createdAt,
+                  u.name as userName, u.email as userEmail, u.subscriptionPlan
+           FROM community_messages m
+           JOIN users u ON u.id = m.userId
+           ${where}
+           ORDER BY m.createdAt DESC LIMIT ?`,
+          [input.limit]
+        );
+        return rows as any[];
+      } finally { conn.release(); }
+    }),
+
+  deleteCommunityMessage: adminProcedure
+    .input(z.object({ messageId: z.number().int() }))
+    .mutation(async ({ input }) => {
+      const { adminDeleteCommunityMessage } = await import("./db");
+      await adminDeleteCommunityMessage(input.messageId);
+      return { ok: true };
+    }),
+});
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -2330,6 +3251,7 @@ export const appRouter = router({
       return { success: true } as const;
     }),
   }),
+  security: securityRouter,
   annual: annualRouter,
   bigGoals: bigGoalsRouter,
   monthly: monthlyRouter,
@@ -2356,5 +3278,7 @@ export const appRouter = router({
   community: communityRouter,
   push: pushRouter,
   invite: inviteRouter,
+  subscription: subscriptionRouter,
+  adminPanel: adminPanelRouter,
 });
 export type AppRouter = typeof appRouter;

@@ -1,4 +1,5 @@
-import { eq, and, or, like, gte, lte, isNull } from "drizzle-orm";
+import { eq, and, or, like, gte, lte, lt, isNull } from "drizzle-orm";
+import { encryptIntegrationTokens, decryptIntegrationTokens } from "./_core/tokenEncryption";
 import { drizzle } from "drizzle-orm/mysql2";
 import { DefaultLogger, LogWriter } from "drizzle-orm/logger";
 import mysql from "mysql2/promise";
@@ -148,6 +149,23 @@ export async function ensureSchema(): Promise<void> {
       { table: "social_accounts", column: "contentNiche", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `contentNiche` VARCHAR(100) DEFAULT NULL" },
       { table: "social_accounts", column: "contentGoal", ddl: "ALTER TABLE `social_accounts` ADD COLUMN `contentGoal` VARCHAR(200) DEFAULT NULL" },
       { table: "user_integrations", column: "gmailEnabled", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `gmailEnabled` TINYINT(1) NOT NULL DEFAULT 0" },
+      { table: "user_integrations", column: "slackBotToken", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `slackBotToken` TEXT DEFAULT NULL" },
+      { table: "user_integrations", column: "slackReadChannelIds", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `slackReadChannelIds` TEXT DEFAULT NULL" },
+      { table: "user_integrations", column: "boxAccessToken", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `boxAccessToken` TEXT DEFAULT NULL" },
+      { table: "user_integrations", column: "granolaApiKey", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `granolaApiKey` TEXT DEFAULT NULL" },
+      { table: "user_integrations", column: "gmailAccessToken", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `gmailAccessToken` TEXT DEFAULT NULL" },
+      { table: "user_integrations", column: "gmailRefreshToken", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `gmailRefreshToken` TEXT DEFAULT NULL" },
+      { table: "user_integrations", column: "gmailTokenExpiry", ddl: "ALTER TABLE `user_integrations` ADD COLUMN `gmailTokenExpiry` DATETIME DEFAULT NULL" },
+      { table: "users", column: "dateOfBirth", ddl: "ALTER TABLE `users` ADD COLUMN `dateOfBirth` VARCHAR(10) DEFAULT NULL" },
+      { table: "users", column: "appleId", ddl: "ALTER TABLE `users` ADD COLUMN `appleId` VARCHAR(255) DEFAULT NULL" },
+      { table: "users", column: "anonymizedAt", ddl: "ALTER TABLE `users` ADD COLUMN `anonymizedAt` DATETIME DEFAULT NULL" },
+      { table: "users", column: "stripeCustomerId", ddl: "ALTER TABLE `users` ADD COLUMN `stripeCustomerId` VARCHAR(255) DEFAULT NULL" },
+      { table: "users", column: "stripeSubscriptionId", ddl: "ALTER TABLE `users` ADD COLUMN `stripeSubscriptionId` VARCHAR(255) DEFAULT NULL" },
+      { table: "users", column: "subscriptionPlan", ddl: "ALTER TABLE `users` ADD COLUMN `subscriptionPlan` VARCHAR(50) NOT NULL DEFAULT 'free'" },
+      { table: "users", column: "subscriptionStatus", ddl: "ALTER TABLE `users` ADD COLUMN `subscriptionStatus` VARCHAR(50) NOT NULL DEFAULT 'active'" },
+      { table: "users", column: "subscriptionPeriodEnd", ddl: "ALTER TABLE `users` ADD COLUMN `subscriptionPeriodEnd` DATETIME DEFAULT NULL" },
+      { table: "users", column: "emailNotificationsEnabled", ddl: "ALTER TABLE `users` ADD COLUMN `emailNotificationsEnabled` BOOLEAN NOT NULL DEFAULT 1" },
+      { table: "users", column: "devotionPopupEnabled", ddl: "ALTER TABLE `users` ADD COLUMN `devotionPopupEnabled` BOOLEAN NOT NULL DEFAULT 1" },
     ];
 
     // Create community tables if they don't exist
@@ -188,6 +206,94 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
+    // ── Security: Audit log — ISO 27001 A.12.4, SOC 2 CC7.1 ──────────────────
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`audit_log\` (
+        \`id\`        BIGINT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\`    INT,
+        \`event\`     VARCHAR(100) NOT NULL,
+        \`category\`  ENUM('auth','data','admin','security') NOT NULL DEFAULT 'auth',
+        \`outcome\`   ENUM('success','failure','blocked') NOT NULL DEFAULT 'success',
+        \`ip\`        VARCHAR(64),
+        \`userAgent\` VARCHAR(500),
+        \`detail\`    JSON,
+        \`requestId\` VARCHAR(36),
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`idx_userId\`   (\`userId\`),
+        INDEX \`idx_event\`    (\`event\`),
+        INDEX \`idx_outcome\`  (\`outcome\`),
+        INDEX \`idx_createdAt\` (\`createdAt\`)
+      )
+    `);
+
+    // ── Security: Login attempts — account lockout (Essential 8, SOC 2 CC6.2) ─
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`login_attempts\` (
+        \`id\`        BIGINT AUTO_INCREMENT PRIMARY KEY,
+        \`email\`     VARCHAR(255) NOT NULL,
+        \`ip\`        VARCHAR(64),
+        \`success\`   TINYINT(1) DEFAULT 0,
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`idx_email_time\` (\`email\`, \`createdAt\`),
+        INDEX \`idx_ip_time\`    (\`ip\`, \`createdAt\`)
+      )
+    `);
+
+    // Zion memory table — stores learned preferences, patterns, insights
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`zion_memory\` (
+        \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\` INT NOT NULL,
+        \`category\` ENUM('preference','pattern','insight','fact') NOT NULL DEFAULT 'fact',
+        \`key_name\` VARCHAR(255) NOT NULL,
+        \`value\` TEXT NOT NULL,
+        \`confidence\` FLOAT DEFAULT 1.0,
+        \`observedCount\` INT DEFAULT 1,
+        \`lastObservedAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        \`updatedAt\` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY \`uq_user_key\` (\`userId\`, \`key_name\`(200)),
+        INDEX \`idx_user\` (\`userId\`)
+      )
+    `);
+
+    // Scheduler log table — tracks sent autonomous emails to avoid duplicates
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`scheduler_log\` (
+        \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+        \`userId\` INT NOT NULL,
+        \`jobType\` VARCHAR(50) NOT NULL,
+        \`dateKey\` VARCHAR(20) NOT NULL,
+        \`sentAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY \`uq_job_date\` (\`userId\`, \`jobType\`, \`dateKey\`),
+        INDEX \`idx_user_job\` (\`userId\`, \`jobType\`)
+      )
+    `);
+
+    // Admin config table — stores runtime plan/feature configuration
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`admin_config\` (
+        \`configKey\` VARCHAR(128) PRIMARY KEY,
+        \`value\` JSON NOT NULL,
+        \`updatedAt\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    // Email OTP table — 2FA codes for login and registration
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`email_otps\` (
+        \`id\`        INT AUTO_INCREMENT PRIMARY KEY,
+        \`email\`     VARCHAR(255) NOT NULL,
+        \`code\`      VARCHAR(6) NOT NULL,
+        \`type\`      ENUM('login','signup') NOT NULL,
+        \`attempts\`  TINYINT NOT NULL DEFAULT 0,
+        \`expiresAt\` DATETIME NOT NULL,
+        \`usedAt\`    DATETIME DEFAULT NULL,
+        \`createdAt\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`idx_email_type\` (\`email\`, \`type\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
     for (const { table, column, ddl } of checks) {
       const [rows] = await conn.query(
         `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
@@ -206,6 +312,55 @@ export async function ensureSchema(): Promise<void> {
   } finally {
     conn.release();
   }
+}
+
+// ─── Email OTP helpers ────────────────────────────────────────────────────────
+
+export async function createOtp(email: string, type: "login" | "signup"): Promise<string> {
+  const pool = getPool();
+  if (!pool) throw new Error("DB unavailable");
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+  // Invalidate any existing unused OTP for this email+type
+  await pool.query(
+    `UPDATE email_otps SET usedAt = NOW() WHERE email = ? AND type = ? AND usedAt IS NULL`,
+    [email.toLowerCase(), type]
+  );
+  await pool.query(
+    `INSERT INTO email_otps (email, code, type, expiresAt) VALUES (?, ?, ?, ?)`,
+    [email.toLowerCase(), code, type, expiresAt]
+  );
+  return code;
+}
+
+export async function verifyOtp(
+  email: string,
+  code: string,
+  type: "login" | "signup"
+): Promise<{ valid: boolean; reason?: string }> {
+  const pool = getPool();
+  if (!pool) return { valid: false, reason: "DB unavailable" };
+  const [rows] = await pool.query(
+    `SELECT id, attempts, expiresAt FROM email_otps
+     WHERE email = ? AND type = ? AND usedAt IS NULL
+     ORDER BY id DESC LIMIT 1`,
+    [email.toLowerCase(), type]
+  );
+  const row = (rows as any[])[0];
+  if (!row) return { valid: false, reason: "No code found — please request a new one" };
+  if (new Date(row.expiresAt) < new Date()) {
+    return { valid: false, reason: "Code expired — please request a new one" };
+  }
+  if (row.attempts >= 3) {
+    return { valid: false, reason: "Too many attempts — please request a new code" };
+  }
+  if (row.code !== code) {
+    await pool.query(`UPDATE email_otps SET attempts = attempts + 1 WHERE id = ?`, [row.id]);
+    const left = 2 - row.attempts;
+    return { valid: false, reason: `Incorrect code — ${left} attempt${left === 1 ? "" : "s"} left` };
+  }
+  await pool.query(`UPDATE email_otps SET usedAt = NOW() WHERE id = ?`, [row.id]);
+  return { valid: true };
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {
@@ -234,7 +389,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     }
-    const extraFields = ["gender", "avatarUrl", "bio", "timezone", "onboardingCompleted"] as const;
+    const extraFields = ["gender", "avatarUrl", "bio", "timezone", "onboardingCompleted", "dateOfBirth", "appleId"] as const;
     for (const field of extraFields) {
       if ((user as any)[field] !== undefined) {
         (values as any)[field] = (user as any)[field];
@@ -250,6 +405,13 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   }
 }
 
+export async function getUserById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
 export async function getUserByOpenId(openId: string) {
   const db = await getDb();
   if (!db) return undefined;
@@ -262,6 +424,41 @@ export async function getUserByEmail(email: string) {
   if (!db) return undefined;
   const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getUserByAppleId(appleId: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.appleId, appleId)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+/** Accounts inactive for `days` or more, excluding ones already anonymized — GDPR/Apple data retention requirement */
+export async function getInactiveUsers(days: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const result = await db
+    .select()
+    .from(users)
+    .where(and(lt(users.lastSignedIn, cutoff), isNull(users.anonymizedAt)));
+  return result;
+}
+
+/** Irreversibly scrubs PII from a long-dormant account while preserving aggregate/anonymous data rows */
+export async function anonymizeUser(userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set({
+    name: "Deleted User",
+    email: `deleted-${userId}@anonymized.local`,
+    passwordHash: null,
+    avatarUrl: null,
+    bio: null,
+    appleId: null,
+    dateOfBirth: null,
+    anonymizedAt: new Date(),
+  }).where(eq(users.id, userId));
 }
 
 // ─── Annual Plans ─────────────────────────────────────────────────────────────
@@ -632,17 +829,19 @@ export async function getUserIntegrations(userId: number): Promise<UserIntegrati
   const db = await getDb();
   if (!db) return undefined;
   const result = await db.select().from(userIntegrations).where(eq(userIntegrations.userId, userId)).limit(1);
-  return result[0];
+  if (!result[0]) return undefined;
+  return decryptIntegrationTokens(result[0]) as UserIntegration;
 }
 
 export async function upsertUserIntegrations(userId: number, data: Partial<Omit<UserIntegration, "id" | "userId" | "createdAt" | "updatedAt">>) {
   const db = await getDb();
   if (!db) return;
-  const existing = await getUserIntegrations(userId);
-  if (existing) {
-    await db.update(userIntegrations).set(data as any).where(eq(userIntegrations.userId, userId));
+  const encrypted = encryptIntegrationTokens(data as Record<string, unknown>);
+  const existing = await db.select({ id: userIntegrations.id }).from(userIntegrations).where(eq(userIntegrations.userId, userId)).limit(1);
+  if (existing[0]) {
+    await db.update(userIntegrations).set(encrypted as any).where(eq(userIntegrations.userId, userId));
   } else {
-    await db.insert(userIntegrations).values({ userId, ...data } as any);
+    await db.insert(userIntegrations).values({ userId, ...encrypted } as any);
   }
 }
 
@@ -1765,6 +1964,350 @@ export async function getAllPushSubscriptionsForReminders(): Promise<Array<{
       `SELECT userId, endpoint, p256dh, auth FROM \`push_subscriptions\``
     );
     return rows as any[];
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── Streak tracking ──────────────────────────────────────────────────────────
+export async function getUserStreak(userId: number): Promise<{
+  currentStreak: number;
+  longestStreak: number;
+  lastActiveDate: string | null;
+  isActiveToday: boolean;
+  streakBroken: boolean; // true if yesterday was missed but user WAS active before
+}> {
+  const pool = getPool();
+  const empty = { currentStreak: 0, longestStreak: 0, lastActiveDate: null, isActiveToday: false, streakBroken: false };
+  if (!pool) return empty;
+  const conn = await pool.getConnection();
+  try {
+    // Collect all distinct dates with any user activity in last 365 days
+    const [rows] = await conn.query(`
+      SELECT activity_date FROM (
+        SELECT DATE(createdAt) AS activity_date
+          FROM zion_messages WHERE userId = ? AND role = 'user'
+        UNION
+        SELECT date AS activity_date
+          FROM daily_entries WHERE userId = ?
+        UNION
+        SELECT date AS activity_date
+          FROM daily_check_ins WHERE userId = ?
+      ) AS combined
+      WHERE activity_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+      GROUP BY activity_date
+      ORDER BY activity_date DESC
+    `, [userId, userId, userId]);
+
+    const dates: string[] = (rows as any[]).map(r => {
+      const d = r.activity_date;
+      if (d instanceof Date) return d.toISOString().slice(0, 10);
+      return String(d);
+    });
+
+    if (dates.length === 0) return empty;
+
+    const dateSet = new Set(dates);
+    const today = new Date();
+    const todayStr = today.toISOString().slice(0, 10);
+    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+    const isActiveToday = dateSet.has(todayStr);
+    const lastActiveDate = dates[0]; // most recent
+
+    // Current streak: walk backwards from today (or yesterday if not active today)
+    let currentStreak = 0;
+    const cursor = new Date(today);
+    if (!isActiveToday) cursor.setDate(cursor.getDate() - 1);
+    for (let i = 0; i < 365; i++) {
+      const ds = cursor.toISOString().slice(0, 10);
+      if (dateSet.has(ds)) { currentStreak++; cursor.setDate(cursor.getDate() - 1); }
+      else break;
+    }
+
+    // Streak is broken if user was active at some point but missed yesterday (and today too)
+    const streakBroken = currentStreak === 0 && lastActiveDate !== null && !dateSet.has(yesterdayStr) && !isActiveToday;
+
+    // Longest streak (all-time)
+    const sorted = Array.from(dateSet).sort();
+    let longest = 0, temp = 1;
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = new Date(sorted[i - 1] + "T12:00:00Z");
+      const curr = new Date(sorted[i] + "T12:00:00Z");
+      const diff = Math.round((curr.getTime() - prev.getTime()) / 86400000);
+      if (diff === 1) { temp++; } else { longest = Math.max(longest, temp); temp = 1; }
+    }
+    longest = Math.max(longest, temp);
+
+    return { currentStreak, longestStreak: longest, lastActiveDate, isActiveToday, streakBroken };
+  } finally {
+    conn.release();
+  }
+}
+
+export async function getLastStreakNotification(userId: number): Promise<string | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT DATE(createdAt) as d FROM zion_messages
+       WHERE userId = ? AND role = 'assistant' AND content LIKE '%streak%' AND content LIKE '%missed%'
+       ORDER BY createdAt DESC LIMIT 1`,
+      [userId]
+    );
+    const row = (rows as any[])[0];
+    if (!row?.d) return null;
+    const d = row.d instanceof Date ? row.d.toISOString().slice(0, 10) : String(row.d);
+    return d;
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── Zion Memory Functions ────────────────────────────────────────────────────
+
+export type ZionMemoryItem = {
+  id: number;
+  category: "preference" | "pattern" | "insight" | "fact";
+  key_name: string;
+  value: string;
+  confidence: number;
+  observedCount: number;
+  lastObservedAt: string;
+};
+
+export async function getZionMemory(userId: number): Promise<ZionMemoryItem[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT id, category, key_name, value, confidence, observedCount, lastObservedAt
+       FROM \`zion_memory\` WHERE userId = ?
+       ORDER BY confidence DESC, observedCount DESC
+       LIMIT 50`,
+      [userId]
+    );
+    return (rows as any[]).map(r => ({
+      id: r.id,
+      category: r.category as ZionMemoryItem["category"],
+      key_name: r.key_name,
+      value: r.value,
+      confidence: r.confidence,
+      observedCount: r.observedCount,
+      lastObservedAt: r.lastObservedAt instanceof Date ? r.lastObservedAt.toISOString().slice(0,10) : String(r.lastObservedAt ?? ""),
+    }));
+  } finally {
+    conn.release();
+  }
+}
+
+export async function upsertZionMemory(
+  userId: number,
+  category: ZionMemoryItem["category"],
+  keyName: string,
+  value: string,
+  confidence = 1.0
+): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `INSERT INTO \`zion_memory\` (userId, category, key_name, value, confidence, observedCount, lastObservedAt)
+       VALUES (?, ?, ?, ?, ?, 1, NOW())
+       ON DUPLICATE KEY UPDATE
+         value = VALUES(value),
+         confidence = VALUES(confidence),
+         observedCount = observedCount + 1,
+         lastObservedAt = NOW(),
+         updatedAt = NOW()`,
+      [userId, category, keyName.slice(0, 200), value.slice(0, 1000), confidence]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+export async function deleteZionMemory(userId: number, keyName: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(`DELETE FROM \`zion_memory\` WHERE userId = ? AND key_name = ?`, [userId, keyName]);
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── Scheduler Helpers ────────────────────────────────────────────────────────
+
+/** Returns true if this job already ran for this user+dateKey today */
+export async function schedulerAlreadyRan(userId: number, jobType: string, dateKey: string): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT id FROM \`scheduler_log\` WHERE userId = ? AND jobType = ? AND dateKey = ? LIMIT 1`,
+      [userId, jobType, dateKey]
+    );
+    return (rows as any[]).length > 0;
+  } finally {
+    conn.release();
+  }
+}
+
+export async function markSchedulerRan(userId: number, jobType: string, dateKey: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.query(
+      `INSERT IGNORE INTO \`scheduler_log\` (userId, jobType, dateKey) VALUES (?, ?, ?)`,
+      [userId, jobType, dateKey]
+    );
+  } finally {
+    conn.release();
+  }
+}
+
+/** Get all users who have been active in the past 60 days and have an email address */
+export async function getActiveUsers(): Promise<Array<{ id: number; name: string | null; email: string; timezone: string | null; emailNotificationsEnabled: boolean }>> {
+  const pool = getPool();
+  if (!pool) return [];
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT DISTINCT u.id, u.name, u.email, u.timezone, u.emailNotificationsEnabled
+       FROM \`users\` u
+       WHERE u.email IS NOT NULL
+         AND u.email NOT LIKE '%@bdbplanner.internal'
+         AND u.email NOT LIKE '%@bdbplanner.local'
+         AND EXISTS (
+           SELECT 1 FROM \`zion_messages\` zm WHERE zm.userId = u.id AND zm.createdAt >= DATE_SUB(NOW(), INTERVAL 60 DAY)
+           UNION ALL
+           SELECT 1 FROM \`daily_entries\` de WHERE de.userId = u.id AND de.date >= DATE_FORMAT(DATE_SUB(NOW(), INTERVAL 60 DAY), '%Y-%m-%d')
+           UNION ALL
+           SELECT 1 FROM \`daily_check_ins\` dc WHERE dc.userId = u.id AND dc.date >= DATE_FORMAT(DATE_SUB(NOW(), INTERVAL 60 DAY), '%Y-%m-%d')
+         )`,
+    );
+    return (rows as any[]).map(r => ({
+      id: r.id,
+      name: r.name ?? null,
+      email: r.email as string,
+      timezone: r.timezone ?? null,
+      emailNotificationsEnabled: r.emailNotificationsEnabled !== 0,
+    }));
+  } finally {
+    conn.release();
+  }
+}
+
+/** Check if a user has a daily check-in for a given date */
+export async function hasCheckInForDate(userId: number, date: string): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.query(
+      `SELECT id FROM \`daily_check_ins\` WHERE userId = ? AND date = ? LIMIT 1`,
+      [userId, date]
+    );
+    return (rows as any[]).length > 0;
+  } finally {
+    conn.release();
+  }
+}
+
+// ─── GDPR / Privacy Data Rights ───────────────────────────────────────────────
+// ISO 27001 A.18.1.4, App Store / Google Play privacy requirements
+
+/**
+ * Export all data belonging to a user (Right to Access / Data Portability).
+ */
+export async function exportUserData(userId: number): Promise<Record<string, unknown>> {
+  const pool = getPool();
+  if (!pool) return {};
+  const conn = await pool.getConnection();
+  try {
+    const tables: Array<{ key: string; sql: string }> = [
+      { key: "profile",      sql: `SELECT name, email, createdAt FROM \`users\` WHERE id = ?` },
+      { key: "annualPlans",  sql: `SELECT year, data FROM \`annual_plans\` WHERE userId = ?` },
+      { key: "monthlyPlans", sql: `SELECT year, month, data FROM \`monthly_plans\` WHERE userId = ?` },
+      { key: "weeklyPlans",  sql: `SELECT year, weekNumber, data FROM \`weekly_plans\` WHERE userId = ?` },
+      { key: "dailyEntries", sql: `SELECT date, data FROM \`daily_entries\` WHERE userId = ?` },
+      { key: "notes",        sql: `SELECT title, folder, content, createdAt FROM \`notes\` WHERE userId = ?` },
+      { key: "reminders",    sql: `SELECT title, date, timeSlot, createdAt FROM \`reminders\` WHERE userId = ?` },
+      { key: "checkIns",     sql: `SELECT date, rating, note FROM \`daily_check_ins\` WHERE userId = ?` },
+      { key: "zionMemory",   sql: `SELECT category, key_name, value FROM \`zion_memory\` WHERE userId = ?` },
+      { key: "zionMessages", sql: `SELECT role, content, createdAt FROM \`zion_messages\` WHERE userId = ?` },
+    ];
+
+    const result: Record<string, unknown> = {
+      exportedAt: new Date().toISOString(),
+      exportVersion: "1.0",
+    };
+
+    for (const { key, sql } of tables) {
+      try {
+        const [rows] = await conn.query(sql, [userId]);
+        result[key] = rows;
+      } catch {
+        result[key] = [];
+      }
+    }
+
+    return result;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * Permanently erase all personal data for a user (Right to Erasure / GDPR Art. 17).
+ * Anonymises the user row to preserve referential integrity; hard-deletes everything else.
+ */
+export async function deleteUserData(userId: number): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    await conn.query(
+      `UPDATE \`users\` SET
+         name = '[Deleted User]',
+         email = CONCAT('deleted_', id, '@deleted.invalid'),
+         passwordHash = NULL,
+         avatarUrl = NULL,
+         bio = NULL,
+         lastSignedIn = NULL
+       WHERE id = ?`,
+      [userId]
+    );
+
+    const hardDeleteTables = [
+      "annual_plans","monthly_plans","weekly_plans","daily_entries",
+      "notes","reminders","daily_check_ins","zion_messages","zion_memory",
+      "push_subscriptions","user_integrations","scheduler_log","social_accounts",
+    ];
+    for (const table of hardDeleteTables) {
+      try { await conn.query(`DELETE FROM \`${table}\` WHERE userId = ?`, [userId]); } catch { /* non-fatal */ }
+    }
+
+    // Anonymise rather than delete — community threads remain coherent
+    await conn.query(
+      `UPDATE \`community_messages\` SET content = '[Message removed]' WHERE userId = ?`,
+      [userId]
+    );
+
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
   } finally {
     conn.release();
   }

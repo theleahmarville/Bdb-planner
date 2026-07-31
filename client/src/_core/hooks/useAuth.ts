@@ -32,12 +32,14 @@ export function useAuth(options?: UseAuthOptions) {
         error instanceof TRPCClientError &&
         error.data?.code === "UNAUTHORIZED"
       ) {
-        return;
+        // already logged out on server — still redirect
+      } else {
+        throw error;
       }
-      throw error;
     } finally {
       utils.auth.me.setData(undefined, null);
-      await utils.auth.me.invalidate();
+      // Full page reload to /login clears all React state and query cache
+      window.location.href = getLoginUrl();
     }
   }, [logoutMutation, utils]);
 
