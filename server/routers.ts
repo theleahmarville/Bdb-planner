@@ -1241,6 +1241,11 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
         const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
         return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
       };
+      // Helper: 0=Mon … 6=Sun day index for a YYYY-MM-DD date
+      const dayIndexOf = (dateStr: string): number => {
+        const d = new Date(dateStr + 'T12:00:00');
+        return (d.getDay() + 6) % 7; // JS Sunday=0 → Mon=0,…Sun=6
+      };
       const weekNumber = input.weekNumber ?? getISOWeek(now);
       // Compute Monday of the current ISO week
       const getMondayOfWeek = (d: Date) => {
@@ -1316,7 +1321,7 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
           const currentSlot = timeSlots[timeKey] ?? '';
           timeSlots[timeKey] = currentSlot ? `${currentSlot}; ${input.content}` : input.content;
           await upsertDailyEntry(userId, targetDate, { timeSlots });
-          return { success: true, target: `Schedule — ${targetDate} at ${timeKey}`, navPath: `/weekly/${year}/${weekNumber}` };
+          return { success: true, target: `Schedule — ${targetDate} at ${timeKey}`, navPath: `/weekly/${year}/${weekNumber}?day=${dayIndexOf(targetDate)}` };
         }
 
         // ── Priority → daily_entries topPriorities ───────────────────────────
@@ -1326,7 +1331,7 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
           const priorities: string[] = (existing?.topPriorities as string[]) ?? [];
           if (priorities.length < 5) priorities.push(input.content);
           await upsertDailyEntry(userId, targetDate, { topPriorities: priorities });
-          return { success: true, target: `Top Priorities — ${targetDate}`, navPath: `/weekly/${year}/${weekNumber}` };
+          return { success: true, target: `Top Priorities — ${targetDate}`, navPath: `/weekly/${year}/${weekNumber}?day=${dayIndexOf(targetDate)}` };
         }
 
         // ── Habit → weekly_plans habitTracker ────────────────────────────────
@@ -1416,7 +1421,7 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
           const rDateObj = new Date(rDate + 'T12:00:00');
           const rWeek = getISOWeek(rDateObj);
           const rYear = rDateObj.getFullYear();
-          return { success: true, target: `Reminder set for ${rDate} at ${rTime}`, navPath: `/weekly/${rYear}/${rWeek}` };
+          return { success: true, target: `Reminder set for ${rDate} at ${rTime}`, navPath: `/weekly/${rYear}/${rWeek}?day=${dayIndexOf(rDate)}` };
         }
 
         // ── Calendar (explicit date) → daily_entries timeSlots + Google Calendar ─
@@ -1456,7 +1461,7 @@ Write a SHORT, warm, personalised goodnight message (2-3 sentences). Reference t
           const tDateObj = new Date(targetDate + 'T12:00:00');
           const tWeek = getISOWeek(tDateObj);
           const tYear = tDateObj.getFullYear();
-          return { success: true, target: `Calendar — ${targetDate} at ${timeKey}`, navPath: `/weekly/${tYear}/${tWeek}` };
+          return { success: true, target: `Calendar — ${targetDate} at ${timeKey}`, navPath: `/weekly/${tYear}/${tWeek}?day=${dayIndexOf(targetDate)}` };
         }
 
         // ── Budget → monthly_plans financial fields ───────────────────────────

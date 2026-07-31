@@ -69,8 +69,14 @@ export default function WeeklyPage() {
   const [activeTab, setActiveTab] = useState(initialTab);
   // Re-sync if URL changes (e.g. navigating from Zion multiple times)
   useEffect(() => {
-    const t = new URLSearchParams(search).get("tab");
+    const params = new URLSearchParams(search);
+    const t = params.get("tab");
     if (t) setActiveTab(t);
+    const d = params.get("day");
+    if (d !== null) {
+      const idx = parseInt(d, 10);
+      if (!isNaN(idx) && idx >= 0 && idx <= 6) setActiveDay(idx);
+    }
   }, [search]);
 
   const { data: weekData } = trpc.weekly.get.useQuery({ year, weekNumber });
