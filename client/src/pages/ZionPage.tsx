@@ -16,13 +16,8 @@ import { toast } from "sonner";
 import { getISOWeek, startOfISOWeek, format } from "date-fns";
 import { useLocation } from "wouter";
 import {
-  getLocalMemories,
-  upsertLocalMemory,
-  deleteLocalMemory,
-  formatMemoryContext,
   exportLocalData,
   importLocalData,
-  type LocalZionMemory,
 } from "@/lib/zionLocalStore";
 import { encryptJson, decryptJson, type EncryptedBundle } from "@/lib/zionCrypto";
 import {
@@ -451,9 +446,14 @@ export default function ZionPage() {
 
   const transcribeMutation = trpc.zion.transcribeVoice.useMutation();
   const clearHistoryMutation = trpc.zion.clearHistory.useMutation();
+  const deleteMemoryMutation = trpc.zion.deleteMemory.useMutation();
   const [showMemory, setShowMemory] = useState(false);
-  const [memories, setMemories] = useState<LocalZionMemory[]>([]);
   const [showBackup, setShowBackup] = useState(false);
+
+  const { data: memories = [], refetch: refetchMemories } = trpc.zion.getMemories.useQuery(undefined, {
+    enabled: !!userId && isAuthenticated && showMemory,
+    staleTime: 30_000,
+  });
 
   // Load history from server DB on mount
   const { data: serverHistory, isLoading: historyQueryLoading } = trpc.zion.history.useQuery(undefined, {
@@ -484,11 +484,6 @@ export default function ZionPage() {
     setHistoryLoading(false);
   }, [serverHistory, historyQueryLoading]);
 
-  // Load memories when panel opens
-  useEffect(() => {
-    if (!showMemory || !userId) return;
-    getLocalMemories(userId).then(setMemories).catch(() => setMemories([]));
-  }, [showMemory, userId]);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -535,14 +530,11 @@ export default function ZionPage() {
         .slice(-16)
         .map(m => ({ role: m.role, content: m.content }));
 
-      const localMems = await getLocalMemories(userId).catch(() => [] as LocalZionMemory[]);
-      const memoryContext = formatMemoryContext(localMems);
-
       const response = await fetch("/api/zion/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ message: text.trim(), isVoice, history: recentHistory, memoryContext }),
+        body: JSON.stringify({ message: text.trim(), isVoice, history: recentHistory }),
       });
 
       if (!response.ok || !response.body) {
@@ -586,13 +578,7 @@ export default function ZionPage() {
                 m.id === assistantMsgId ? { ...m, content: display, plannerActions: finalPlannerActions } : m
               ));
 
-              // Messages are now persisted server-side in the stream endpoint
-
-              // Persist memory updates
-              const memUpdates = Array.isArray(evt.memoryUpdates) ? evt.memoryUpdates as Array<{ category: LocalZionMemory["category"]; key: string; value: string }> : [];
-              for (const item of memUpdates) {
-                await upsertLocalMemory(userId, { category: item.category, keyName: item.key, value: item.value }).catch(() => {});
-              }
+              // Messages and memories are now persisted server-side in the stream endpoint
             } else if (evt.error) {
               throw new Error(String(evt.error));
             }
@@ -637,9 +623,8 @@ export default function ZionPage() {
   };
 
   const handleDeleteMemory = async (keyName: string) => {
-    if (!userId) return;
-    await deleteLocalMemory(userId, keyName).catch(() => {});
-    setMemories(prev => prev.filter(m => m.keyName !== keyName));
+    await deleteMemoryMutation.mutateAsync({ keyName }).catch(() => {});
+    refetchMemories();
   };
 
   const startRecording = async () => {
@@ -786,7 +771,7 @@ export default function ZionPage() {
               </p>
             ) : (
               memories.map(m => (
-                <div key={m.keyName} className="flex items-start gap-2 group">
+                <div key={(m as any).key_name} className="flex items-start gap-2 group">
                   <div className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 mt-0.5 ${
                     m.category === "preference" ? "bg-emerald-100 text-emerald-700" :
                     m.category === "pattern"    ? "bg-blue-100 text-blue-700" :
@@ -795,10 +780,10 @@ export default function ZionPage() {
                   }`}>{m.category}</div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[10px] text-violet-900 leading-relaxed">{m.value}</p>
-                    <p className="text-[9px] text-violet-400">{m.keyName}</p>
+                    <p className="text-[9px] text-violet-400">{(m as any).key_name}</p>
                   </div>
                   <button
-                    onClick={() => handleDeleteMemory(m.keyName)}
+                    onClick={() => handleDeleteMemory((m as any).key_name)}
                     className="opacity-0 group-hover:opacity-100 text-violet-300 hover:text-red-500 transition-all shrink-0 mt-0.5"
                     title="Forget this"
                   >
@@ -810,7 +795,7 @@ export default function ZionPage() {
           </div>
           <div className="px-3 py-1.5 border-t border-violet-200 bg-violet-100/50">
             <p className="text-[9px] text-violet-400 text-center flex items-center justify-center gap-1">
-              <Lock className="w-2.5 h-2.5" /> Stored on your device only · never sent to our servers
+              <Lock className="w-2.5 h-2.5" /> Encrypted · stored securely on our servers · private to you
             </p>
           </div>
         </div>

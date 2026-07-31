@@ -69,6 +69,9 @@ import {
   upsertUser,
   getUserStreak,
   getLastStreakNotification,
+  getZionMemory,
+  upsertZionMemory,
+  deleteZionMemory,
 } from "./db";
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
@@ -997,15 +1000,26 @@ Rules:
   history: protectedProcedure
     .input(z.object({ limit: z.number().int().min(1).max(500).optional() }).optional())
     .query(async ({ ctx, input }) => {
-      const { getZionHistory } = await import('./db');
-      return getZionHistory(ctx.user.id, input?.limit ?? 100);
+      const { getZionHistory: _getHistory } = await import('./db');
+      return _getHistory(ctx.user.id, input?.limit ?? 100);
     }),
 
   clearHistory: protectedProcedure.mutation(async ({ ctx }) => {
-    const { clearZionHistory } = await import('./db');
-    await clearZionHistory(ctx.user.id);
+    const { clearZionHistory: _clearHistory } = await import('./db');
+    await _clearHistory(ctx.user.id);
     return { success: true };
   }),
+
+  getMemories: protectedProcedure.query(async ({ ctx }) => {
+    return getZionMemory(ctx.user.id);
+  }),
+
+  deleteMemory: protectedProcedure
+    .input(z.object({ keyName: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      await deleteZionMemory(ctx.user.id, input.keyName);
+      return { success: true };
+    }),
 
   chat: protectedProcedure
     .input(z.object({

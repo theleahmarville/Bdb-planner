@@ -16,7 +16,7 @@ import { createContext } from "./context";
 // vite.ts is only loaded dynamically in development so esbuild never
 // bundles vite / vite-plugins into the production output
 
-import { getDb, ensureSchema, getUserPlannerContext, saveZionMessage } from "../db";
+import { getDb, ensureSchema, getUserPlannerContext, saveZionMessage, getZionMemory, upsertZionMemory } from "../db";
 import { startScheduler } from "../scheduler";
 import { authService } from "./sdk";
 import { streamAnthropicLLM } from "./llm";
@@ -370,7 +370,7 @@ async function startServer() {
       return;
     }
 
-    const { message, history = [], memoryContext = "" } = req.body ?? {};
+    const { message, history = [] } = req.body ?? {};
     if (typeof message !== "string" || !message.trim()) {
       res.status(400).json({ error: "message is required" });
       return;
@@ -387,7 +387,12 @@ async function startServer() {
 
     try {
       const context = await getUserPlannerContext(user.id);
-      const systemPrompt = buildZionSystemPrompt(context, memoryContext ?? "");
+      // Load memories from DB — server is source of truth, client no longer sends them
+      const memRows = await getZionMemory(user.id).catch(() => [] as any[]);
+      const memoryContext = memRows.length
+        ? memRows.map((m: any) => `[${m.category}] ${m.key_name}: ${m.value}`).join("\n")
+        : "";
+      const systemPrompt = buildZionSystemPrompt(context, memoryContext);
 
       const msgs: Array<{ role: "user" | "assistant"; content: string }> = [
         ...(Array.isArray(history) ? history : []).map((m: any) => ({
@@ -418,11 +423,16 @@ async function startServer() {
 
       const memoryUpdates = await extractMemories(message, displayContent);
 
-      // Persist conversation to DB so history survives refresh / other devices
+      // Persist conversation to DB
       await saveZionMessage({ userId: user.id, role: "user", content: message.trim(), metadata: null }).catch(() => {});
       await saveZionMessage({ userId: user.id, role: "assistant", content: displayContent, metadata: plannerActions.length ? JSON.stringify({ plannerActions }) : null }).catch(() => {});
 
-      send({ done: true, displayContent, plannerActions, memoryUpdates });
+      // Persist memory updates to DB — no longer sent to client for IndexedDB
+      for (const mem of memoryUpdates) {
+        await upsertZionMemory(user.id, mem.category, mem.key, mem.value).catch(() => {});
+      }
+
+      send({ done: true, displayContent, plannerActions });
     } catch (err: any) {
       console.error("[Zion stream]", err?.message ?? err);
       send({ error: "Zion is unavailable right now. Please try again." });
